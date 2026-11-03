@@ -22,3 +22,11 @@ __pycache__/
 results/**/*.kmb
 results/**/*.npz
 results/**/*.npy
+
+# --- local-only deliverables (WeChat article; not for GitHub) ---
+wechat_article/
+docs/wechat_article.md
+docs/wechat_article.html
+docs/figures/
+src/make_article_figures.py
+src/render_article_html.py
