@@ -1,0 +1,6 @@
+{
+  "message": "B1 v2 (K=32 D=2) + sample B2/B3",
+  "sources": ["b1_v2_model.py", "b1_fit.py", "b1_v2_build.py"],
+  "blobs": {},
+  "benchmarks": {"invsqrt": "b1_v2", "dqi": "sample", "dfthcsos": "sample"}
+}

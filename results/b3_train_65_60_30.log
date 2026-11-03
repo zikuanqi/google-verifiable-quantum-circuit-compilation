@@ -1,0 +1,17 @@
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+Seeding parameters from /mnt/d/kaggle/google-verifiable-quantum-circuit-compilation/data/starter_kit/starter_kit/baselines/FeMoCo76o113e_65_60_60_ep50000_seed0.npz
+Training U/V (65, 60, 76) and W (65, 60, 30) with generators None for 2000 epochs with DF-THC-SOS.
+B@epoch 0: ε_fro=3176.7mHa, λ_eff=30.28Ha, Λ=367.95Ha (Λ_1=91.109, Λ_2=276.8), cost = 5836.6mHa, E_SOS: -22141.521Ha, gap: 1.2480Ha, ms/it: 111.09
+B@epoch 200: ε_fro=641.0mHa, λ_eff=183.10Ha, Λ=351.44Ha (Λ_1=84.149, Λ_2=267.3), cost = 649.3mHa, E_SOS: -22191.736Ha, gap: 51.4629Ha, ms/it: 1138.22
+B@epoch 400: ε_fro=212.9mHa, λ_eff=190.38Ha, Λ=351.26Ha (Λ_1=88.384, Λ_2=262.9), cost = 222.0mHa, E_SOS: -22196.338Ha, gap: 56.0645Ha, ms/it: 956.12
+B@epoch 600: ε_fro=111.2mHa, λ_eff=192.37Ha, Λ=350.64Ha (Λ_1=89.650, Λ_2=261.0), cost = 120.4mHa, E_SOS: -22197.754Ha, gap: 57.4805Ha, ms/it: 1049.67
+B@epoch 800: ε_fro=73.3mHa, λ_eff=192.52Ha, Λ=349.63Ha (Λ_1=89.875, Λ_2=259.8), cost = 82.5mHa, E_SOS: -22198.051Ha, gap: 57.7773Ha, ms/it: 1158.21
+B@epoch 1000: ε_fro=56.3mHa, λ_eff=192.14Ha, Λ=348.90Ha (Λ_1=89.719, Λ_2=259.2), cost = 65.5mHa, E_SOS: -22197.949Ha, gap: 57.6758Ha, ms/it: 621.65
+B@epoch 1200: ε_fro=47.0mHa, λ_eff=191.62Ha, Λ=348.37Ha (Λ_1=89.427, Λ_2=258.9), cost = 56.2mHa, E_SOS: -22197.705Ha, gap: 57.4316Ha, ms/it: 565.93
+B@epoch 1400: ε_fro=41.2mHa, λ_eff=191.06Ha, Λ=347.96Ha (Λ_1=89.102, Λ_2=258.9), cost = 50.3mHa, E_SOS: -22197.420Ha, gap: 57.1465Ha, ms/it: 426.89
+B@epoch 1600: ε_fro=37.2mHa, λ_eff=190.53Ha, Λ=347.63Ha (Λ_1=88.782, Λ_2=258.8), cost = 46.3mHa, E_SOS: -22197.137Ha, gap: 56.8633Ha, ms/it: 432.29
+B@epoch 1800: ε_fro=34.5mHa, λ_eff=190.04Ha, Λ=347.36Ha (Λ_1=88.482, Λ_2=258.9), cost = 43.5mHa, E_SOS: -22196.869Ha, gap: 56.5957Ha, ms/it: 496.57
+B@epoch 1990: ε_fro=32.6mHa, λ_eff=189.62Ha, Λ=347.14Ha (Λ_1=88.221, Λ_2=258.9), cost = 41.5mHa, E_SOS: -22196.639Ha, gap: 56.3652Ha, ms/it: 525.42
+Saved optimized solution to /mnt/d/kaggle/google-verifiable-quantum-circuit-compilation/results/b3_train_65_60_30.npz
+done in 1576s
+{'E_SOS': -22196.638671875, 'Lambda': 347.1444396972656, 'cost': 0.04152119159698486, 'lambda_H1': 88.22061157226562, 'lambda_H2': 258.923828125, 'lambda_eff': 189.62255859375, 'sos_gap': 56.365234375}

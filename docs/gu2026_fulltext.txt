@@ -1,0 +1,2804 @@
+Discovering state-of-the-art quantum circuits with large language models
+Andi Gu,1, 2, 3,∗ Alek H. Kemeny,4 Susanne F. Yelin,1, 2 and Mikhail D. Lukin1, 2, 5
+1Harvard Quantum Initiative for Science and Engineering, Cambridge, MA 02138, USA
+2Department of Physics, Harvard University, Cambridge, MA 02138, USA
+3Anthropic STEM Fellows Program
+4Anthropic
+5QuEra Computing, 1380 Soldiers Field Road, Boston, MA 02135, USA
+Significant efforts are currently being directed toward the implementation of large-scale quantum
+information processors, but realizing useful quantum advantage also requires the development of
+efficient quantum algorithms. While for many practical problems the dominant resource costs
+are associated with a small set of computational primitives, optimizing them in the quantum
+setting presents unique challenges, including areversibilityconstraint absent from ordinary classical
+computation. Here we introduce an evolutionary framework in which large language models (LLMs)
+propose circuit designs and an independent evaluator verifies and scores them. We apply this
+framework to tasks spanning numerical computation, chemistry, optimization, quantum simulation,
+and number theory. In seven of the eight tasks, the discovered circuits significantly reducebothToffoli
+and qubit counts relative to the state of the art. In the eighth, the search discovers a new reversible
+architecture for prime-field modular inversion. By handling reversibility differently, the architecture
+makes divsteps—a classical algorithm previously impractical for reversible integer arithmetic—viable
+and substantially improves the Toffoli–qubit trade-off for modular inversion. These results open the
+door for evaluator-guided LLM co-design of new algorithmic structures for quantum computation.
+Computational primitives based on classical function
+evaluation play a central role in a wide range of quantum
+algorithms. Such primitives include decoding routines for
+optimization [1], numerical functions for quantum simula-
+tion [2], arithmetic routines for number theory [3], and
+quantum read-only memory (QROM), which coherently
+loads classically specified data into quantum registers [4].
+To operate on quantum data, these functions must be
+compiled into circuits that can be executed coherently on
+quantum hardware. This imposes two constraints absent
+from ordinary classical programs. First, because the in-
+put may be in superposition, the circuit cannot inspect
+an intermediate value and select an ordinary classical
+control-flow path. Data-dependent behavior is instead
+expressed through controlled operations within a fixed
+gate sequence, so every branch contributes to the circuit’s
+cost even if it applies only to some inputs. Second, the
+computation must be reversible: intermediate information
+cannot simply be overwritten or discarded. Temporary
+values must eventually be uncomputed, returning their
+qubits to their initial state and preventing residual infor-
+mation from remaining entangled with the output. Until
+they are uncomputed, these values occupy additional
+qubits. At the same time, when bounded error is permit-
+ted, machinery needed only for rare or atypical inputs can
+sometimes be omitted, reducing resource requirements
+while keeping the failure probability controlled. Efficient
+coherent compilation is of major practical importance,
+and recent reductions in resource requirements have come
+from coordinated changes to arithmetic algorithms, data
+representations, and their reversible implementation [5, 6].
+Such redesigns are difficult for general quantum circuits
+∗ andigu@g.harvard.edu
+because directly testing correctness can require exponen-
+tially expensive classical simulation or fully operational
+large-scale quantum processors. Automated circuit op-
+timizers therefore typically preserve correctness by re-
+stricting the search to predefined equivalence-preserving
+rewrites [7], limiting them to variations of a fixed design.
+Here we introduce a framework that pairs large lan-
+guage model (LLM) proposals with an independent eval-
+uator that verifies and scores each candidate. We focus
+on a class of quantum circuits that compute a classical
+function f: for an arbitrary input|ψ⟩ = Px,y αx,y |x⟩ |y⟩,
+the circuit must act as|ψ⟩ 7− →Px,y αx,y |x⟩ |y⊕f(x)⟩,
+where |x⟩ and |y⟩ are computational-basis states of the
+input and output registers, respectively. By linear-
+ity, this coherent action is correct if the circuit per-
+forms the required map on every computational-basis
+input: |x⟩ |y⟩ 7− → |x⟩ |y⊕f(x)⟩. This basis-state re-
+duction makes candidate circuits amenable to program-
+matic evaluation, since every allowed operation maps a
+computational-basis state to another computational-basis
+state, possibly changing its phase, but never creating a
+superposition [8]. The action of a candidate on any chosen
+input can therefore be simulated by tracking a bit string
+and its phase, rather than2n amplitudes. Resource ac-
+counting is also simple: we use the Toffoli countT and the
+peak qubit countQ, and rank circuits by their product,
+the T Q-cost. Together, these properties let us build an
+efficient, programmaticevaluator that checks the correct-
+ness and resource cost of any candidate circuit design.
+Each search begins from a hand-written task specifi-
+cation and a blank program; the specification states the
+required circuit behavior but provides no implementation
+guidance. The LLM proposes a candidate and iteratively
+revises it using evaluator feedback (Figure 1(a)). Previ-
+ous work represents candidates as sequences of gates or
+arXiv:2610.22367v1  [quant-ph]  15 Oct 2026
+2
+(a) Discovery pipeline
+Task specification
+Reed–Solomon decoding,
+70 syndromes overF212
+Ideation
+LLM proposes candidate algorithm families
+F amily 1
+Extended
+Euclidean
+F amily 2
+Berlekamp–
+Massey
+F amily 3
+PGZ
+decoder
+Seeds
+LLM
+solver.py
+def solve(b):
+c = b.alloc(n)
+b.ccx(x, y, c)
+b.free(c)
+b.emit()
+Evaluator
+Verify and score
+EditsCircuit
+Feedback
+Select global best
+Discovered circuit
+4.4·105 T×1,837Q
+(b) Conditional routing x↦→
+{
+x+c y, b= 0,
+x+c z, b= 1
+Naïve
+n
+n
+n
+n
+n
+b
+z z
+y y
+|0⟩
+MADD
+MADD
+|0⟩
+x x′
+c c
+T= 3n 2 + 17n−2
+Routed
+n
+n
+n
+n
+b
+z z
+y
+MADD
+y
+x x′
+c c
+T= 3n2 +17n−22
+...
+· · ·
+U1 U2 · · · Un U −1n · · · U −12 U −11
+U1 U2 · · · Un U −1n · · · U −12 U −11
+Compute Uncompute
+b1 |0⟩
+b2 |0⟩
+bn |0⟩
+Naïve
+Branch decoding
+bn b2 b1
+(c) Decoding computational history
+(d) Approximation and rare events
+Resource demand
+Probability
+Worst case
+Failure with
+probabilityϵ
+FIG. 1Overview of the circuit-discovery framework. (a) A hand-written task specification defines the circuit design
+task (for example, Reed–Solomon decoding) and is given to an LLM. The LLM proposes architecturally different
+approaches (algorithm families; here extended Euclidean, Berlekamp–Massey, and Peterson–Gorenstein–Zierler (PGZ)
+decoders), which are then developed and optimized in parallel. Strong candidates are periodically shared between
+families to allow for cross-pollination of useful ideas. (b) Conditional routing reduces the cost of coherent control flow:
+for instance, two controlled multiply-adds (MADDs) become inexpensive controlled swaps and one shared arithmetic
+block. (c) Branch decisions that a naïve reversible computation stores during the forward pass (red) can instead be
+decoded from the current state during uncomputation. (d) When an application permits bounded error, allowing rare
+failures on atypical, costly inputs reduces resource requirements.
+predefined circuit blocks [9, 10], which can obscure the al-
+gorithmic structure of the circuit. Our framework instead
+lets the LLM propose and revise candidates through a
+high-level Python interface, where reusable functions and
+ordinary programming constructs make that structure
+explicit. This allows a single conceptual change to reorga-
+nize operations throughout the circuit, while the evaluator
+tests its consequences for correctness and resource cost.
+However, purely iterative refinement of a single candi-
+date can remain tied to the architecture from which it
+began, resulting in convergence to local (but not necessar-
+ily global) optima. We therefore start with an ideation
+stage in which the LLM is prompted to propose several
+distinctalgorithm families, each representing a different
+approach to the problem. Circuits within each family are
+optimized independently in parallel, allowing the search
+to explore different strategies rather than only variations
+of one design. Well-performing candidates are periodically
+shared between families so that an idea discovered in one
+approach can inform another.
+Across eight diverse compilation tasks, the discovered
+circuits repeatedly exhibit three common principles of
+algorithm–circuit co-design. These principles address the
+features of coherent compilation described above: express-
+ing data-dependent control flow, making intermediate
+computations reversible without retaining their entire his-
+tory, and using a failure budget to remove circuit resources
+devoted to atypical cases (see Figure 1).
+3
+DESIGN PRINCIPLES
+One recurring principle in the circuits discovered by
+the search is to replace conditional arithmetic withcondi-
+tional routing. A naïve coherent translation of a casewise
+classical algorithm includes a separately controlled arith-
+metic block for every branch. The discovered circuits
+instead use a representation in which the branches differ
+primarily in which values occupy particular computational
+roles. Relatively cheap controlled swaps then route the
+appropriate values into those roles, one unconditional
+arithmetic path performs the expensive work, and further
+routing places the results in their required registers. In
+this sense, where a classical program routes execution
+to the selected operation, the coherent circuit routes the
+selected data through a shared operation. The idea re-
+sembles bucket-brigade quantum random-access memory
+(QRAM) [11].
+For example, consider fourn-qubit fixed-point registers
+c, x, y, and z, together with a control qubitb. Suppose
+that we wish to perform
+x7− →
+(
+x+cyforb= 0,
+x+czforb= 1, (1)
+while returning c, y, and z unchanged. A naïve imple-
+mentation uses two controlled multiply-adds. Conditional
+routing instead swaps y and z according to b, applies
+one uncontrolled multiply-add, and undoes the swap.
+For the standard schoolbook construction [12], this re-
+duces the Toffoli count fromTnaive(n) = 3n2 + 17n− 2to
+Trouted(n) = (3n2 + 17n−2)/2, as shown in Figure 1(b).
+More generally, conditional routing requirescanonical-
+izingbranch-dependent states into a representation on
+which the same expensive computation applies. Schemati-
+cally, when the branch can be expressed asUb = R−1b KR b,
+the circuit need only control the inexpensive routing trans-
+formation Rb; the expensive kernelK appears once and
+need not be controlled. Finding such a decomposition
+typically takes more than recognizing identical arithmetic
+in two branches: it exploits an equivalence in the required
+output so that apparently different updates become in-
+stances of the same computation. The difficulty lies less
+in the routing circuit than in determining which branch-
+dependent differences matter and which can be absorbed
+into a shared representation.
+Reversibility creates a second challenge: reversing a
+conditional update requires knowing which branch was
+taken during the forward computation. A naïve imple-
+mentation records each decision in a history stack whose
+size grows with the number of updates. But the branch
+decisions need not always be stored explicitly: different
+branches may leave distinguishable patterns in registers
+that remain available during uncomputation. As illus-
+trated in Figure 1(c), the circuit can recover the branch
+bit from such a pattern, use it to select the appropriate
+inverse update, and then clear the recovered bit, so the
+register contents serve as an inexpensive record of the
+branch decisions. For example, suppose we have a register
+g that begins atg0 = 0. In round j, conditioned on some
+branch bitb j, we add2j, so that
+gj+1 =g j +b j2j.(2)
+For arbitrary values ofgj, there is no way to tell from
+gj+1 which branch was taken. Globally, however, there
+is an important invariant:gj < 2j, and therefore bitj of
+gj+1 must equal bj. During uncomputation, the circuit
+can simply read this bit to recoverbj. The computation’s
+evolving state thus supplies the branch decisions in reverse
+order without a separate history stack. In general, finding
+such a decoder requires the forward algorithm, its data
+representation, and its uncomputation procedure to be
+designed together. Viewed locally, an update may be
+ambiguous, since either branch can appear to admit a
+valid predecessor. The ambiguity can disappear once the
+circuit is restricted to states reachable from the prescribed
+initialization, where a relation across the registers can
+distinguish histories that no single register can.
+The third principle exploits the small but finite fail-
+ure probability permitted by most quantum algorithms.
+Turning this failure budget into resource savings, how-
+ever, is not automatic. One must first identify the rare
+inputs that determine worst-case resource requirements.
+Unlike a classical program, a quantum circuit must con-
+tain the gates and ancillas required by every supported
+path. A rare input can therefore determine the circuit’s
+Toffoli count or peak qubit count. Yet identifying such
+inputs is not enough: the circuitry supporting them may
+not be separable from the computation on typical inputs.
+The co-design task is to reorganize the computation so
+that the additional resources required by rare inputs are
+localized—for example, to extra iterations, stack entries,
+or arithmetic lanes. Those components can then be omit-
+ted while confining failure to the low-probability inputs
+that require them (Figure 1(d)). In what follows we
+show how these design principles result in significantly
+improved algorithmic circuits across a wide variety of
+quantum tasks.
+REVERSIBLE SYNDROME DECODING FOR DQI
+Decoded quantum interferometry (DQI) is a quantum
+algorithm that turns certain optimization problems into
+decoding problems for classical error-correcting codes,
+using quantum interference to favor better solutions. A
+central application is optimal polynomial intersection
+(OPI), a form of polynomial fitting over finite fields for
+which DQI offers a superpolynomial speedup over known
+classical algorithms. DQI achieves this by using a Reed–
+Solomon decoder as a subroutine within the quantum
+computation [1]. The decoder identifies the positions and
+values of errors from a collection of algebraic checks called
+syndromes. DQI requires this decoding to run coherently
+onasuperpositionofinputs, makingthereversibledecoder
+a dominant resource cost. Khattaret al.[13] compiled
+4
+DQI circuits for OPI over binary extension fields using
+reversible Reed–Solomon decoders based on the extended
+Euclidean algorithm.
+We study their primary Reed–Solomon instance, in
+which 70 syndrome values uniquely determine an error
+pattern containing at most 35 errors. Our search frame-
+work discovered a circuit that replaces their synchronized
+Euclidean solve with the Berlekamp–Massey (BM) recur-
+rence. BM substantially reduces the arithmetic cost, but
+its updates overwrite intermediate values that a naïve
+reversible implementation would retain in a large history
+stack. The discovered circuit preserves BM’s arithmetic
+advantage while avoiding most of this storage (Figure 2).
+Reed–Solomon decoding amounts to determining which
+positions in the data contain errors. TheL error positions
+are encoded in a locator polynomialσ(z) = PLk=0 σkzk,
+whose roots identify those positions. To recover the loca-
+tor coefficients, BM solves for the lowest-degree nonzero
+polynomial whose convolution (see Figure 2(d)) with the
+syndrome sequence vanishes:
+(S∗σ) r =
+LX
+k=0
+σkSr−k = 0, r=L+ 1, . . . ,70.(3)
+BM constructs the locator incrementally. At each round,
+the convolution evaluated at the next syndrome gives the
+discrepancy∆: if it vanishes, no correction is needed;
+otherwise, BM adjusts the locator coefficients and, when
+necessary, increases its degree.
+To make a correction without invalidating previous
+rounds of updates, BM retains an earlier polynomialτ as a
+correction template, together with its nonzero discrepancy
+δ. When∆ ̸= 0, BM scales τ by α = ∆/δ and applies
+the correction σ←σ−ατ . BM keeps the template until
+the current locator has accumulated enough information
+from subsequent syndromes to take over its role:
+(σ, τ, δ)←
+(σ−ατ, τ, δ)(retain),
+(σ−ατ, σ,∆)(replace).
+(4a)
+(4b)
+The replace update in Equation (4b) creates the main
+reversibility problem: it overwrites the previous template
+τ and discrepancy δ. A naïve reversible implementation
+stores these displaced values so that the update can later
+be undone. Over repeated rounds, this accumulates a
+history of whole polynomials (Figure 2(b)).
+The discovered circuit avoids this polynomial history
+by exploiting a freedom in the decoding task: the loca-
+tor is needed only up to a nonzero multiplicative factor,
+because rescaling leaves its roots unchanged. The circuit
+(Figure 2(c)) therefore implements a rescaled version of
+both branches of Equation (4), using simple conditional
+routing and a single shared update:
+(σ, τ, δ)←
+(
+(σ−ατ, τ, δ)(retain),
+(τ−α −1σ, σ,∆)(replace).
+(5a)
+(5b)
+The result τ−α −1σ = −α−1(σ−ατ )differs from the
+locator in the unrescaled update only by the nonzero scale
+factor −α−1 and so has the same roots. Both branches
+can then use one shared arithmetic path without storing
+the displaced templateτ.
+This resolves the history problem for the polynomial
+registers, but the discrepancies present a second reversibil-
+ity problem. To uncompute a correction, the circuit must
+recover whichever discrepancy is no longer present after
+the update. The replace case of Equation (5b) overwrites
+the stored valueδold with δnew = ∆, but the circuit can
+decodeδ old from the constant coefficients of the updated
+locator registers. BM shifts the template by one power of
+z every round, soτ has zero constant coefficient entering
+the round. Writingσ0 and τ0 for the constant coefficients
+after the update givesδold = σ0τ −10 δnew. This case thus
+adds no entry to the history stack. In fact, the circuit
+never stores δ at all: the same relation fixesδ in terms
+of the locator’s constant coefficient (Supplementary Infor-
+mation [SI] I.1). The retain update of Equation (5a) is
+the exception: it keeps the previous discrepancyδ, while
+the current discrepancy∆, which is needed to reverse the
+correction, remains only in a temporary register. Each
+retain update therefore stores∆on the history stack. In
+the worst case, 35 stack entries (665 qubits) would be
+needed. Under the DQI input distribution, a second stack
+entry is required with probability1.0 × 10−4, so the dis-
+covered circuit allocates only one stack entry (19 qubits
+instead of 665) and permits failure on these rare inputs.
+Together, these transformations make the arith-
+metically efficient BM algorithm suitable for re-
+versible computation.
+REVERSIBLE MODULAR INVERSION
+Modular inversion is the task of findingx such that
+wx≡ 1 ( modp ), given a nonzero inputw and a primep.
+It is a central arithmetic subroutine in a range of quantum
+algorithms [3, 14]. A standard way to compute the inverse
+is through the extended Euclidean algorithm. Euclidean
+algorithms repeatedly simplify a pair of integers while
+preserving their greatest common divisor. By tracking
+howthisdivisorisexpressedintermsoftheoriginalinputs,
+they also recover coefficientsα, βsatisfying αp + βw = 1,
+soβis the inverse ofwmodulop.
+Divsteps is a variant of the Euclidean algorithm that
+replaces division with conditional additions, subtractions,
+and halving [15]. Starting fromf = p and g = w, the goal
+is to reduce the pair tof = ±1and g = 0while preserving
+their greatest common divisor. The basic strategy is to
+hold the odd integerf fixed while reducingg: if g is even,
+it can be halved directly; ifg is odd, adding or subtracting
+f first makes it even. These operations preserve the great-
+est common divisor becausef is odd. Holding f fixed
+indefinitely, however, would leave only one integer being
+reduced, so the algorithm must periodically swap their
+roles. A small signed counter z schedules these swaps
+without ever comparingf and g: it roughly tracks how
+many more bitsf has than g, so a swap occurs onceg is
+5
+flag
+∆
+DIVδ δ′
+|0⟩
+MADD
+α
+τ τ ′
+σ σ−ατ
+|0⟩ hδ
+|0n⟩ hτ
+flag
+∆
+DIVδ δ′
+|0⟩
+MADD
+α
+τ τ ′
+σ ∝σ−ατ
+=100,000 Toffolis
+(a) Synchronized Euclid (Khattar et al.)
+(b) Naïve Berlekamp–Massey (c) Berlekamp–Massey with conditional routing
+(d) Locator construction by convolution
+Syndrome S
+Locator σ
+S ∗σ
+Round 1
+No update
+Round 2
+∆
+Replace (4b)
+Round 3
+∆
+Retain (4a)
+Round 4
+∆
+Replace (4b)
+Round 5
+∆
+Replace (4b)
+FIG. 2Reversible Reed–Solomon decoding. (a) The synchronized extended-Euclidean construction of Khattar
+et al.[13] requires approximately1 .9million Toffolis for the locator solve. (b) Berlekamp–Massey reduces this cost
+to approximately140 ,000Toffolis but naïvely accumulates intermediate information (red). DIV forms α = ∆ /δ,
+MADD applies the multiply-add, and the flag marks the replace case. (c) Conditional routing preserves this arithmetic
+advantage while avoiding most history storage. Block widths are proportional to Toffoli count. (d) Locator construction
+as convolution with the syndrome sequence. The discrepancy∆is the convolution at the next syndrome; a nonzero
+value requires updating the locator.
+likely the smaller of the two. This allows both integers
+to be reduced using only inexpensive arithmetic and con-
+trol. Two auxiliary integersfv and gv track the input’s
+contribution in a scaled form: aftert steps, they satisfy
+fvw≡ 2tf (modp )and gvw≡ 2tg (modp ). Thus, at
+termination, f fv gives the desired inverse up to the scaling
+factor2 t. The scaling keeps the coefficient updates free
+of division. Starting from(z, f, g, fv, gv) = (0, p, w,0, 1),
+each step applies one of three updates:
+(z′, f′, g′, f′v, g′v) =
+
+
+
+(−z, g,(g−f)/2,2g v, gv −f v)forz≥0, godd,
+(z+ 1, f,(g+f)/2,2f v, gv +f v)forz <0, godd,
+(z+ 1, f, g/2,2f v, gv)forgeven.
+(6a)
+(6b)
+(6c)
+Classically, each update overwrites the current state.
+Reversing the computation, however, requires knowing
+whichofthethreeupdateswasapplied. Anaïveimplemen-
+tation would store this choice at every step, accumulating
+a history stack alongside the arithmetic registers. The
+discovered circuit instead recovers decisions from the cur-
+rent arithmetic state. Some decisions are easy to recover
+from the updated registers, while others require a more
+6
+involved decoding procedure. We label each update by
+two bits: s records whether the step swaps the roles of
+f and g, and b records whether the incomingg is odd.
+The updates in Equations (6a) to (6c) have labels(s, b) =
+(1, 1), (0, 1), (0, 0), respectively. The task during uncom-
+putation is to recover these bits from the updated state.
+For many steps, recovering b and s requires only a
+few observations about the updated registers. A swap
+(Equation (6a)) always leaves a distinctive pattern inf′v.
+To see this, note that throughout the recurrence,fv is even
+and gv is odd. A swap setsf ′v = 2gv, which has exactly
+one trailing zero bit, whereas a nonswap setsf ′v = 2fv,
+which is divisible by four. Thus the updated coefficient
+identifies every swap, recovering boths = 1and b = 1;
+otherwise, s = 0, so the swap bit s isalwayscheaply
+recoverable. For nonswaps, two further tests determine
+b. If z′ ≥ 1, the incomingg must have been even, since
+an odd value would have triggered a swap. If the step
+first reaches g′ = 0, the incoming g must instead have
+been odd, since halving a nonzero even integer cannot
+give zero. Together, these simple tests recover about two
+thirds of the decisions in a typical walk (the sequence
+of divsteps applied to one input). The only unresolved
+cases are nonterminating nonswaps withz′ ≤ 0, where the
+circuit must determine whether the step addedfv to gv,
+that is, the bitbin the update(f ′v, g′v) = (2fv, gv +bf v).
+Consider a swap followed by a sequence of these ambigu-
+ous nonswaps, which we call anexcursion. Immediately
+after the swap,fv = 2q for some oddq. On the jth step
+of the excursion,fv = 2j−1q (hence f ′v = 2jq), where the
+excursion depth j counts the initiating swap as step 1.
+Equivalently, j is the number of trailing zero bits in the
+updated coefficientf ′v. The update togv becomes
+g′v =g v +b2 j−1q.(7)
+Note that this almost matches the binary-record construc-
+tion in Equation (2). The only difference is the shared
+factor q: to recoverb, we need to remove the factorq from
+the update. Since f ′v = 2jq is known, we can recoverq by
+removing the trailing zero bits fromf ′v. To remove the
+same factor from both sides of the update, we multiply
+by q−1 modulo2 j; this inverse exists becauseq is odd.
+The update rule then becomes
+g′vq−1 mod 2j = (gvq−1 mod 2j) +b2 j−1.(8)
+Crucially, in Appendix A, we show that(gvq−1 mod 2j) <
+2j−1. Therefore,
+b= bit j−1
+ 
+g′vq−1 mod 2j ,(9)
+where bit positions are counted from zero at the least
+significant (rightmost) bit. Every quantity on the right-
+hand side is determined by the updated registers, so the
+rule recovers the branch decision without access to the
+previous state. This recovery relies on a global invariant
+ensuring that earlier branch history cannot contaminate
+the deciding bit. The LLM identified this invariant, which
+links information accumulated across successive updates
+to the branch decisions needed during uncomputation,
+and developed it into a proof that the arithmetic state
+retains the information required for recovery [16].
+For a givenj, the rule in Equation (9) depends only on
+the lowestj bits ofg′v and the lowestj bits ofq. Therefore,
+for each small value ofj, we treat the decoding rule as a
+truth table mapping2j input bits to a single bitb, and
+compile it directly into a Boolean circuit. For largerj,
+the decoder must inspect more bits and becomes increas-
+ingly expensive. Although every decision is recoverable in
+principle, decoding all of them does not give the cheapest
+circuit. A tunable cutoffjstore determines which ambigu-
+ous decisions are decoded and which are stored. At depths
+j < jstore, the circuit uses a decoder; at depthsj≥j store,
+it writes the decision to a history stack. Increasing the
+cutoff spends more Toffolis on decoding while reducing
+the required history storage, giving a family of circuits
+that trade Toffoli count against qubit count (SI II).
+Further savings are possible when the application per-
+mits a small failure probability. We use this failure budget
+to exclude rare, unusually demanding inputs through two
+resource limits: a fixed history-stack size and a fixed win-
+dow of supported stopping times. The history-stack limit
+builds on the decoding trade-off. Withjstore = 5, only
+12.4%of ambiguous decisions are written to the stack
+(Figure 3(a)). On average, the required stack size is 21
+history qubits, but it can reach 263 in the worst case. We
+instead reserve 60 and allow the circuit to fail on rare
+inputs for which the stack overflows. Such overflows occur
+with probability2 .4 × 10−6 per inversion (Figure 3(b)),
+saving 203 history qubits relative to the worst case. The
+stopping-time limit addresses a separate cost. A fixed
+quantum circuit must schedule enough steps for every
+input it supports. Although 590 divsteps suffice even in
+the worst case, stopping times are concentrated in a much
+narrower range (Figure 3(b)). The discovered circuit
+therefore schedules 533 steps and tests for termination
+only from step 499 onward; inputs that terminate outside
+this window are allowed to fail.
+Branch decoding and bounded resource allocation thus
+make divsteps practical for reversible modular inversion.
+A complete benchmark circuit built on this inversion
+(SI II) uses 4.0 million Toffolis and 935 qubits.
+DISCUSSION AND OUTLOOK
+The DQI and modular inversion constructions illustrate
+how redesigning the representation and uncomputation
+of an algorithm can substantially reduce its quantum
+resource requirements. Similar gains arise across the
+other tasks studied here. For seven of the eight tasks, the
+discovered circuit uses both fewer Toffolis and fewer qubits
+thanthecorrespondingbaseline. TableIsummarizesthese
+improvements, and the Supplementary Information gives
+details for each task.
+A recurring source of these gains is the recovery of
+classical algorithmic efficiency under the constraints of
+7
+0 100 200 300 400 500
+Walk step t
+1
+2
+3
+4
+5
+6
+8
+10Excursion depth j
+(a) Ambiguous decisions in one walk
+Stored
+Decoded
+10−210−1
+Share of
+ambiguous decisions
+≥ 10
+87.6%
+12.4%
+500 550 600
+Stopping time t
+10−1
+10−4
+10−7
+P (tstop = t)
+W orst-case
+(b) Time and space limits
+9.3×10−6
+1.4×10−6
+0 30 60
+Stored decisions C per walk
+10−1
+10−4
+10−7
+P (C = c)
+2.4×10−6
+263
+W orst-case
+FIG. 3Making divsteps reversible with minimal overhead. (a) Excursion depthj in one representative walk. Dots
+mark ambiguous decisions. We use a cutoffjstore = 5, so all ambiguous decisions withj≥ 5are stored rather than
+decoded. The histogram shows the distribution of excursion depths over uniformly sampled walks: only 12.4% of
+ambiguous decisions reachj≥ 5. (b) Empirical stopping-time and history-size distributions. The discovered circuit
+assumes that every walk terminates between steps499and533; this assumption fails with probability∼ 10−5. It also
+allocates enough qubits to store at most 60 branch decisions, which is sufficient for all but a2.4 × 10−6 fraction of
+walks.
+TABLE IToffoli–qubit results across the eight compilation tasks, comparing baselines against our discovered circuits
+(see Extended Data Table 1 for details);GT Q= (T Q)baseline/(T Q)ours. Where a baseline contains free parameters, we
+choose them to minimize itsT Q-cost. HHL: Harrow–Hassidim–Lloyd.
+Task Baseline(T , Q)Ours(T , Q) GT Q
+Reed–Solomon DQI decoder(5.1·10 6,1,938) (4.4·10 5,1,837) 12
+Hermitian DQI decoder(1.0·10 8,1.9·10 5)† (9.3·105,2,395) —†
+HHL rotation angle(1.6·10 4,300) (1,348,115) 32
+Coulomb potential(6,355,252) (1,140,142) 9.9
+Fixed-point Gaussian(2.4·10 4,362) (1,583,139) 39
+Fe2S2 alias–Select(5.5·10 4,139) (1.5·10 4,126) 4.1
+Nonabelian lattice-gauge simulation(1.3·10 6,1,927) (1.7·10 5,1,859) 7.7
+Prime-field modular inversion — ‡ (4.0·106,935) —
+† Naïve reversible implementation; no prior reversible compilation exists in the
+literature.
+‡ Costs are for the complete benchmark circuit; see SI II for the benchmark
+and prior constructions.
+quantum computation. In a naïve reversible implementa-
+tion, coherent control and cleanup can introduce enough
+overhead to obscure the advantages of an efficient classical
+method. Our Berlekamp–Massey and divstep construc-
+tions show how jointly choosing the algorithm, represen-
+tation, and uncomputation can recover those advantages.
+These results suggest that some apparent costs of quan-
+tum arithmetic reflect limitations of existing reversible
+constructions rather than of the algorithms themselves.
+Finding such constructions requires reasoning about
+choices whose benefits depend on one another. An arith-
+metic saving may become useful only after the associated
+control and uncomputation costs have also been reduced.
+A candidate design must therefore be carried through sev-
+eral unresolved mathematical and implementation prob-
+lems before its resource advantage becomes apparent.
+The framework is bounded by the choices that define
+each task. One is the objective that ranks circuits: we
+use the T Q-cost for a uniform comparison, but other ob-
+jectives are equally reasonable. In practice, the relative
+importance of qubit count, depth, routing, and measure-
+ments depends on details such as hardware constraints,
+decoder performance, and error-correction architecture.
+The scoring function can be replaced with a hardware-
+appropriate combination of these resources, but deter-
+mining that objective remains a matter of application
+and hardware judgment. The circuit interface defines a
+second boundary. Here, the required transformation is
+8
+specified in a fixed computational basis, excluding op-
+timizations whose advantage comes from changing the
+encoding itself. For example, coset representations can
+make modular addition cheaper by encoding each residue
+as a superposition of congruent integers, which avoids
+conventional comparisons and corrections at the cost of
+an exponentially small error [17, 18], but such encodings
+lie outside the present framework. More generally, the
+task boundary, input distribution, data representations,
+and accuracy target make a search well posed while also
+encoding assumptions about how the circuit is embed-
+ded in a larger algorithm (in particular, which states it
+receives and how its outputs are consumed).
+The same choices that bound the search also make re-
+liable programmatic feedback possible: they specify what
+each candidate must preserve and which resource trade-
+offs the evaluator should reward. Within these boundaries,
+our results show that evaluator-guided LLM search can go
+beyond refining a fixed circuit to uncover new reversible
+algorithms and representations. Related approaches have
+produced new algorithms in combinatorics and linear alge-
+bra [19, 20]. These observations suggest a practical crite-
+rion for extending the approach: wherever a problem ad-
+mits a sufficiently expressive task interface and its correct-
+ness and resource costs can be evaluated cheaply enough
+to sustain many rounds of search, the same evaluator-
+guided search may provide a route to new algorithms.
+These results, together with related progress in rein-
+forcement learning and LLM-guided discovery of quan-
+tum error-correcting codes and encoding circuits [21–23],
+create an opportunity for end-to-end co-design of fault-
+tolerant computation. Choices that are usually made
+separately—the algorithm and its logical circuit, the
+error-correcting code and its method for universal logic,
+the supply of magic states, and the physical execution
+architecture—strongly determine one another’s costs. A
+programmatic evaluator that propagates logical errors,
+resource demand, and hardware requirements across these
+layers could allow an LLM search to redesign them to-
+gether, potentially discovering fault-tolerant algorithms
+and architectures that cannot be found by optimizing
+each layer in isolation.
+ACKNOWLEDGMENTS
+We thank Pablo Bonilla, Arjun Kar, Nazli Ugur
+Koyluoglu, Rohan Mehta, Varun Menon, and Vinay Ra-
+masesh for feedback on the manuscript. AG conducted
+part of this work under the Anthropic STEM Fellows
+Program. Work at Harvard was supported by IARPA
+and the Army Research Office under the Entangled Log-
+ical Qubits program (Cooperative Agreement Number
+W911NF-23-2-0219) and by the National Science Foun-
+dation (NVQL grant PHY-2410716).
+9
+METHODS
+A classical function cannot generally be applied directly within a quantum algorithm, because quantum evolution
+must be reversible. Instead, a functionf is embedded in a reversible map|x⟩ |y⟩ 7− → |x⟩ |y⊕f(x)⟩. A natural model for
+these subroutines is thekickmixcircuit model of Babbushet al. [8], which augments reversible classical computation
+with measurement-based uncomputation (MBU) and diagonal sign gates. Despite these additional operations,kickmix
+circuits remain efficiently classically simulable. This allows candidate circuits to be tested for their action on coherent
+quantum superpositions, providing the reliable correctness signal needed for evolutionary search.
+Circuits that implement the same specification can have very different time and space requirements. We use Toffoli
+count and peak qubit count as proxies for these costs. Toffoli gates require expensive non-Clifford resources, so their
+count tracks a large part of the logical work and often the runtime [24, 25]. The peak qubit count measures the data
+and ancillas that must coexist during execution and therefore approximates the required logical processor footprint [26].
+The two resources also typically trade against each other: additional ancillas can avoid recomputation, while recycling
+ancillas can reduce space at the cost of additional gates. We multiply these quantities to obtain theT Q-cost, which
+provides a single objective for comparing such designs.
+Together, the correctness tests andT Q-cost define a constrained optimization problem over circuit-generating
+programs. Motivated by recent advances in coding and reasoning agents and LLM-guided algorithmic discovery, we
+use an LLM to propose coordinated, task-specific redesigns within an evolutionary search [20, 27, 28].
+Circuit model and validity
+A compilation task specifies a reversible action on computational-basis states: a permutationπ and, when needed, a
+Boolean phaseg. A circuit may useaancilla qubits, but must return them to zero:
+V|x⟩ |0a⟩= (−1) g(x) |π(x)⟩ |0a⟩.(10)
+Every ancilla must return to|0⟩ because quantum operations must be unitary, and thus reversible. For a numerical
+approximation, the required output relation may instead specify an error bound; interface preservation, phase
+correctness, and ancilla uncomputation remain exact. We separately allow some circuits to fail on a bounded fraction
+of inputs drawn from a stated distribution; this fraction is thefailure budget. Following Babbushet al.[8], thekickmix
+model permits three classes of operation:
+1. classical reversible gates:X, CNOT, Toffoli, and swap;
+2. diagonal sign gates:Z, CZ, CCZ, and global sign flips; and
+3. destructiveX-basis measurements.
+Before any measurement, the evolution of a computational-basis input is simple. Reversible gates update its stored bit
+string, while diagonal gates update only its sign, so the state remains of the form(−1)ϕ |x⟩. A classical simulator
+therefore need only track the current bitsx and the signϕ, rather than a full state vector. The operations apply phase
+kickback whilemixing basis states, givingkickmixits name.
+To illustrate why uncomputation is costly, consider a temporary AND. A Toffoli computest = uv into an ancilla.
+Afterthas been used, applying the same Toffoli again returns that qubit to zero:
+|u, v⟩ |0⟩
+T offoli
+− − − − → |u, v⟩ |uv⟩
+useuv
+− − − − → |u, v⟩ |uv⟩
+T offoli
+− − − − → |u, v⟩ |0⟩.(11)
+Computing and uncomputing this temporary AND therefore costs two Toffolis.
+MBU, introduced by Gidney[29], replaces the second Toffoli with a destructiveX-basis measurement and a cheap
+phase correction. Measuring t produces a uniformly random outcomer and releases the ancilla, which can be restored
+to|0⟩:
+|u, v⟩ |0⟩
+T offoli
+− − − − → |u, v⟩ |uv⟩
+useuv
+− − − − → |u, v⟩ |uv⟩
+X-measurer
+− − − − − − − − − →(−1)ruv |u, v⟩ |0⟩CZifr=1− − − − − − → |u, v⟩ |0⟩.(12)
+Because CZ is Clifford, the temporary AND is computed and cleared using only one Toffoli. By linearity, the same
+reasoning applies component by component when the retained bits are in superposition.
+More generally, suppose an ancilla contains a Boolean functionf (y)of retained basis datay. If m records any earlier
+measurement outcomes, the simulator represents the ancilla’s destructiveX-basis measurement by the transition
+((y, f(y)), m, ϕ)7− →(y, mr, ϕ⊕rf(y)),Pr(r= 0) = Pr(r= 1) = 12 .(13)
+10
+On a coherent input, the retained state is therefore
+X
+y
+αy(−1)rf(y) |y⟩.(14)
+Whenr= 1, a classically conditioned diagonal circuit for(−1)f(y) cancels this sign.
+For a fixed computational-basis input and a particular sequence of measurement outcomesm, we call the resulting
+evolution acomputational-basis trajectory. Akickmixcircuit may perform several such measurements. Their outcomes
+may be combined by classical XOR and may control diagonal corrections, but cannot control gates that change the
+stored basis string. Every measurement record therefore induces the same basis permutation:
+Vm |x⟩= (−1) ϕ(x,m) |π(x)⟩.(15)
+Exact coherent correctness additionally requires
+ϕ(x, m) =g(x)(16)
+for every allowed input and every record of nonzero probability. The measurement register then factors from the logical
+output. Allowing an outcome to control a basis-changing gate would instead make the permutation depend on the
+record and could leave the logical output correlated with the measurement environment.
+Validation and statistical guarantees
+The circuits are ultimately applied to coherent superpositions, whereas the evaluator follows one computational-basis
+trajectory at a time. Each test must therefore capture enough information to determine the trajectory’s coherent
+action. For a basis inputx and measurement recordm, the evaluator checks that the output matches the target,
+required inputs are unchanged, every ancilla has returned to|0⟩, and the phase agrees with the target exactly. These
+checks compare the complete final state rather than only its classical output. An ancilla that retains input-dependent
+information can become entangled with the logical registers, while an incorrect sign can alter subsequent interference
+without changing any output bit. Resetting or tracing out a dirty ancilla is therefore not a substitute for uncomputing
+it.
+If every pair(x, m)passes these tests, the measurement record factors from the logical output, and linearity extends
+agreement on every trajectory to any coherent input. For large input domains, however, the evaluator samples these
+trajectories rather than checking them all.
+Consider a coherent input|ψ⟩ = Px αx |x⟩, with D(x) = |αx|2, and let M be the set of possible measurement
+records. After deferring the measurements, the candidate and target states can be written as
+|ΦV ⟩= 1p|M| Xx,m αxVm |x⟩ |m⟩,|Φ U ⟩= 1p|M| Xx,m αxU|x⟩ |m⟩.(17)
+LetBbe the set of pairs(x, m)on whichV m |x⟩ ̸=U|x⟩, and let
+ε= 1|M| X(x,m)∈B |αx|2 (18)
+be the probability ofB under D and the uniform distribution over measurement records. Projecting onto the span of
+these defective trajectories gives
+|ΦV ⟩ − |ΦU ⟩ ≤2 √ε.(19)
+Consequently, the state fidelity is at least(1− 2ε)2. Any subsequent measurement distribution changes by at most2√ε
+in total variation distance. We boundε by drawing x from D and sampling every measurement outcome uniformly,
+exactly as in a basis trajectory. For a candidate fixed before the test draw,k independent tests all pass with probability
+(1−ε) k. Thus, if allktests pass, then with confidence1−δ
+ε≤1−δ 1/k ≈ ln(1/δ)k .(20)
+More generally, if a test withk random samples accepts at mostb failures, a candidate with true failure probabilityε
+passes with probability
+Pk,b(ε) =
+bX
+j=0
+k
+j
+
+εj(1−ε) k−j .(21)
+11
+Cost model and scoring
+We define theT Q-cost of a circuit by
+T Q=Toffoli count×peak qubit count,(22)
+whereTcounts Toffoli and CCZ gates equally andQis the largest number of logical qubits allocated at once.
+We weight space and time equally in this cost function for simplicity. In practice, their relative importance depends
+on the hardware and application. When qubits are scarce, for example, a cost of the form(qubit count)κ ×Toffoli count
+with κ >1may be more appropriate; resource estimates for factoring have usedκ between 1 and 3 [6, 30]. Either T or
+Q can also be replaced with other measures of time or space. In particular, when there is limited magic-state-factory
+throughput (as is typically the case), runtime is bottlenecked by the Toffoli count, motivating its widespread use as a
+time proxy [24, 25]. However, with enough factories to supply magic states in parallel, Toffoli depth rather than Toffoli
+count limits runtime. Similarly, for architectures with cheap cold storage for inactive qubits [31], Q can be replaced by
+active volume [32], which counts only the qubits participating in logical operations.
+The search is not tied to the specific form of theT Q-cost: it can run with any computable objective. A later case study
+illustrates the available trade-offs: the modular-inversion search (SI II) produces a family of circuits along a Toffoli–qubit
+frontier (SI II.1), and an objective that weights qubit count more heavily selects a lower-qubit member of that family.
+Evolutionary search
+We encode each candidate as Python code that constructs a circuit. Functions, loops, and named registers preserve
+the organization of the computation, allowing the LLM to reason about arithmetic subroutines and their composition
+without reconstructing that structure from a flattened gate sequence. For example, changing a shared arithmetic
+routine changes every place where it is used, while reorganizing calls to that routine can change when intermediate
+values are computed, retained, and uncomputed. The representation thus makes coordinated changes expressible as
+revisions to the underlying algorithm.
+We search over these circuit-generating programs with OpenEvolve [33], using Claude Mythos 5 [28] to propose
+architectures and program rewrites. Each of the eight searches uses a fixed, hand-written task specification, and all
+share the same generic circuit-building interface. During ideation, the LLM receives only the specification, circuit
+model, and correctness criteria, and proposes several distinct circuit architectures. The LLM has no access to the
+evaluator beyond the feedback returned after each submission. Starting from a blank program, it chooses the algorithm,
+representation, and circuit structure and produces the discovered circuits without substantive human intervention.
+Each architecture proposed during ideation founds a separate family of candidate programs. Later iterations improve
+descendants of the first working implementation. Keeping the families separate at first gives each approach time
+to mature, even if its earliest circuits are less efficient than those based on another approach. Periodically, leading
+programs are shared across families, allowing successful ideas from different approaches to combine.
+The search retains candidate programs and their evaluation results, tracking which family each belongs to and which
+earlier program it was derived from. It also saves feedback on failures and short notes in which the LLM records
+useful insights. These programs, results, and notes carry information between iterations; the sessions do not share a
+continuously growing conversation.
+Each iteration starts a new LLM agent session with the task specification, a parent program to improve, and its
+evaluation feedback. The agent also receives alternative programs from the archive and their resource costs, brief
+summaries of earlier attempts, and recorded insights where available. This context is limited; the agent never sees the
+complete search history. Within the session, it may rewrite the program, run drafts on test inputs, query a classical
+oracle for the required function on chosen inputs, and use the results to revise its design. It may also delegate focused
+subtasks to subagents. The iteration ends with submission of a revised program. The evaluator rejects a circuit that
+does not meet the task specification; a valid one is scored by itsT Q-cost and considered for retention in its family.
+Thus the LLM is free to propose broad changes without having to judge their correctness: the evaluator supplies
+an independent test of every completed design. Extended Data Figure 1 shows the ideation and rewrite calls and a
+concrete feedback-and-repair cycle for a small finite-field inversion task.
+To decide which valid candidates remain available within each family, the search retains circuits with different
+trade-offs between Toffoli count and qubit count. We implement this selection with MAP-Elites [34], which divides the
+(T, Q)resource plane into cells and keeps the circuit with the lowestT Q-cost in each cell. A space-efficient circuit can
+therefore remain available for later development even when its higher Toffoli count gives it a worseT Q-cost.
+Because the families preserve alternatives, progress need not be monotonic in either resource. The Gaussian lineage
+in Extended Data Figure 2, for example, contains descendants that temporarily worsen Toffoli count or qubit count
+before reaching a region of lowerT Q-cost. We report the lowestT Q-cost reached across all families at the end of the
+search.
+12
+[1] S. P. Jordan, N. Shutty, M. Wootters, A. Zalcman, A. Schmidhuber, R. King, S. V. Isakov, and R. Babbush, Optimization
+by Decoded Quantum Interferometry, Nature646, 831 (2025), arXiv:2408.08292.
+[2] R. Babbush, D. W. Berry, I. D. Kivlichan, A. Y. Wei, P. J. Love, and A. Aspuru-Guzik, Exponentially more precise quantum
+simulation of fermions in second quantization, New Journal of Physics18, 033032 (2016).
+[3] M. Roetteler, M. Naehrig, K. M. Svore, and K. Lauter, Quantum resource estimates for computing elliptic curve discrete
+logarithms, inAdvances in Cryptology – ASIACRYPT 2017, Lecture Notes in Computer Science, Vol. 10625 (2017) pp.
+241–270, arXiv:1706.06752.
+[4] R. Babbush, C. Gidney, D. W. Berry, N. Wiebe, J. R. McClean, A. Paler, A. G. Fowler, and H. Neven, Encoding electronic
+spectra in quantum circuits with linear T complexity, Physical Review X8, 041015 (2018).
+[5] C. Chevignard, P.-A. Fouque, and A. Schrottenloher, Reducing the number of qubits in quantum factoring, inAdvances in
+Cryptology – CRYPTO 2025, Part II, Lecture Notes in Computer Science, Vol. 16001 (2025) pp. 384–415.
+[6] C. Gidney, How to factor 2048 bit RSA integers with less than a million noisy qubits (2025), arXiv:2505.15917.
+[7] Y. Nam, N. J. Ross, Y. Su, A. M. Childs, and D. Maslov, Automated optimization of large quantum circuits with continuous
+parameters, npj Quantum Information4, 23 (2018).
+[8] R. Babbush, A. Zalcman, C. Gidney, M. Broughton, T. Khattar, H. Neven, T. Bergamaschi, J. Drake, and D. Boneh,
+Securing elliptic curve cryptocurrencies against quantum vulnerabilities: Resource estimates and mitigations, PRX Quantum
+7, 031001 (2026), arXiv:2603.28846.
+[9] Z. Liang, J. Cheng, R. Yang, H. Ren, Z. Song, D. Wu, X. Qian, T. Li, and Y. Shi, Unleashing the potential of LLMs for
+quantum computing: A study in quantum architecture design (2023), arXiv:2307.08191 [quant-ph].
+[10] A. Macarone-Palmieri and R. Lo Franco, Quantum circuit generation via test-time learning with large language models
+(2026), arXiv:2602.03466 [quant-ph].
+[11] V. Giovannetti, S. Lloyd, and L. Maccone, Quantum random access memory, Physical Review Letters100, 160501 (2008),
+arXiv:0708.1879.
+[12] T. Häner, M. Roetteler, and K. M. Svore, Optimizing quantum circuits for arithmetic (2018), arXiv:1805.12445 [quant-ph].
+[13] T. Khattar, N. Shutty, C. Gidney, A. Zalcman, N. Yosri, D. Maslov, R. Babbush, and S. P. Jordan, Verifiable quantum
+advantage via optimized DQI circuits (2025), arXiv:2510.10967.
+[14] W. van Dam and G. Seroussi, Efficient quantum algorithms for estimating Gauss sums (2002), arXiv:quant-ph/0207131.
+[15] D. J. Bernstein and B.-Y. Yang, Fast constant-time GCD computation and modular inversion, IACR Transactions on
+Cryptographic Hardware and Embedded Systems2019, 340 (2019).
+[16] A. Gu, uncompute (2026).
+[17] C. Zalka, Shor’s algorithm with fewer (pure) qubits (2006), arXiv:quant-ph/0601097.
+[18] C. Gidney, Approximate encoded permutations and piecewise quantum adders (2019), arXiv:1905.08488.
+[19] B. Romera-Paredes, M. Barekatain, A. Novikov, M. Balog, M. P. Kumar, E. Dupont, F. J. R. Ruiz, J. S. Ellenberg, P. Wang,
+O. Fawzi, P. Kohli, and A. Fawzi, Mathematical discoveries from program search with large language models, Nature625,
+468 (2024).
+[20] A. Novikov, N. V˜ u, M. Eisenberger, E. Dupont, P.-S. Huang, A. Z. Wagner, S. Shirobokov, B. Kozlovskii, F. J. R. Ruiz,
+A. Mehrabian, M. P. Kumar, A. See, S. Chaudhuri, G. Holland, A. Davies, S. Nowozin, P. Kohli, and M. Balog, AlphaEvolve:
+A coding agent for scientific and algorithmic discovery (2025), arXiv:2506.13131.
+[21] V. P. Su, C. Cao, H.-Y. Hu, Y. Yanay, C. Tahan, and B. Swingle, Discovery of optimal quantum codes via reinforcement
+learning, Physical Review Applied23, 034048 (2025), arXiv:2305.06378.
+[22] J. Olle, R. Zen, M. Puviani, and F. Marquardt, Simultaneous discovery of quantum error correction codes and encoders
+with a noise-aware reinforcement learning agent, npj Quantum Information10, 126 (2024), arXiv:2311.04750 [quant-ph].
+[23] G. Yan, S. Li, P. Ma, Q. Zhang, P. Ma, J. Wang, M.-H. Hsieh, and Y. Du, OmniQEC: Discovering practical quantum
+error-correcting codes by an AI scientist (2026), arXiv:2607.25865 [quant-ph].
+[24] A. G. Fowler, Time-optimal quantum computation (2012), arXiv:1210.4626.
+[25] C. Gidney and A. G. Fowler, Flexible layout of surface code computations using AutoCCZ states (2019), arXiv:1905.08916.
+[26] M. E. Beverland, P. Murali, M. Troyer, K. M. Svore, T. Hoefler, V. Kliuchnikov, G. H. Low, M. Soeken, A. Sundaram, and
+A. Vaschillo, Assessing requirements to scale to practical quantum advantage (2022), arXiv:2211.07629.
+[27] Anthropic, Claude Opus 5 system card (2026).
+[28] Anthropic, Claude Fable 5 & Claude Mythos 5 system card (2026).
+[29] C. Gidney, Halving the cost of quantum addition, Quantum2, 74 (2018), arXiv:1709.06648.
+[30] C. Gidney and M. Ekerå, How to factor 2048 bit RSA integers in 8 hours using 20 million noisy qubits, Quantum5, 433
+(2021), arXiv:1905.09749.
+[31] C. Gidney, M. Newman, P. Brooks, and C. Jones, Yoked surface codes, Nature Communications16, 4498 (2025),
+arXiv:2312.04522 [quant-ph].
+[32] D. Litinski and N. Nickerson, Active volume: An architecture for efficient fault-tolerant quantum computers with limited
+non-local connections (2022), arXiv:2211.15465.
+[33] A. Sharma, OpenEvolve: an open-source evolutionary coding agent (2025).
+[34] J.-B. Mouret and J. Clune, Illuminating search spaces by mapping elites (2015), arXiv:1504.04909.
+[35] T. Khattar, N. Shutty, C. Gidney, A. Zalcman, N. Yosri, D. Maslov, R. Babbush, and S. Jordan, Data for “Verifiable
+Quantum Advantage via Optimized DQI Circuits” (2025).
+13
+[36] P. Wuille, safegcd-bounds: bounds on divsteps iterations in safegcd (2021), exact hull-threshold computation for divstep
+iteration bounds.
+[37] S. Osorio Perez, E. M. Murairi, E. J. Gustafson, and H. Lamm, Primitive quantum gates for an SU(3) discrete subgroup:
+Σ(72×3)(2025), arXiv:2511.17437 [hep-lat].
+[38] A. Schrottenloher, Optimized point addition circuits for elliptic curve discrete logarithms (2026), arXiv:2606.02235 [quant-ph].
+[39] S. Sakata, H. E. Jensen, and T. Høholdt, Generalized Berlekamp–Massey decoding of algebraic-geometric codes up to half
+the Feng–Rao bound, IEEE Transactions on Information Theory41, 1762 (1995).
+[40] H. Luo, Z. Yang, J. Luo, Z. Wang, Y. Su, X. Sun, L. Li, and T. Li, Quantum algorithm for elliptic curve discrete logarithms
+with space-efficient point addition (2026), arXiv:2607.13816v3 [quant-ph].
+[41] A. Gu and S. P. Jordan, Algebraic geometry codes and Decoded Quantum Interferometry (2025), arXiv:2510.06603.
+[42] E. Prange, The use of information sets in decoding cyclic codes, IRE Transactions on Information Theory8, 5 (1962).
+[43] R. T. Chien, Cyclic decoding procedures for Bose-Chaudhuri-Hocquenghem codes, IEEE Transactions on Information
+Theory10, 357 (1964).
+[44] G. D. Forney, Jr., On decoding BCH codes, IEEE Transactions on Information Theory11, 549 (1965).
+[45] This agrees with the decoder-stage estimate recomputed from the authors’ released code [35] (5.0 million Toffolis, 1,885
+qubits) within about2%in Toffoli count; the qubit counts differ because the estimate takes stage-wise maxima while the
+composed circuit retains the Euclidean state during the scan.
+[46] J. L. Massey, Shift-register synthesis and BCH decoding, IEEE Transactions on Information Theory15, 122 (1969).
+[47] Herea≥0and0≤b≤7.
+[48] A. N. Skorobogatov and S. G. Vlăduţ, On the decoding of algebraic-geometric codes, IEEE Transactions on Information
+Theory36, 1051 (1990).
+[49] A. L. Toom, The complexity of a scheme of functional elements simulating the multiplication of integers, Doklady Akademii
+Nauk SSSR150, 496 (1963).
+[50] M. Cenk and F. Özbudak, On multiplication in finite fields, Journal of Complexity26, 172 (2010).
+[51] H. Stichtenoth,Algebraic Function Fields and Codes, 2nd ed., Graduate Texts in Mathematics, Vol. 254 (Springer, Berlin,
+Heidelberg, 2009).
+[52] J. Proos and C. Zalka, Shor’s discrete logarithm quantum algorithm for elliptic curves, Quantum Information and
+Computation3, 317 (2003), arXiv:quant-ph/0301141.
+[53] B. C. developers, The safegcd implementation in libsecp256k1 explained.
+[54] G. Banegas, D. J. Bernstein, I. van Hoof, and T. Lange, Concrete quantum cryptanalysis of binary elliptic curves, IACR
+Transactions on Cryptographic Hardware and Embedded Systems2021, 451 (2021).
+[55] We drawP and Q independently and nearly uniformly from the points of the curve, omitting the cases on which the affine
+formulas are incomplete.
+[56] An exact worst-case analysis guarantees that every nonzero input modulop terminates within 590 divsteps, compared with
+the circuit’s 533-step schedule [36]. Within 533 scheduled steps, an excursion whose swap fires at counter valuez = D
+consumes2 D + 1steps and stores at mostD− 3decisions, so a walk can store at most(533− 1)/2 − 3 = 263decisions. The
+hatching in Figure 3(b) extends to this ceiling.
+[57] W. J. Cody and W. M. Waite,Software Manual for the Elementary Functions, Prentice-Hall Series in Computational
+Mathematics (Prentice-Hall, Englewood Cliffs, NJ, 1980).
+[58] A. W. Harrow, A. Hassidim, and S. Lloyd, Quantum algorithm for linear systems of equations, Physical Review Letters
+103, 150502 (2009), arXiv:0811.3171.
+[59] I. D. Kivlichan, N. Wiebe, R. Babbush, and A. Aspuru-Guzik, Bounding the costs of quantum simulation of many-body
+physics in real space, Journal of Physics A: Mathematical and Theoretical50, 305301 (2017), arXiv:1608.05696.
+[60] Y. Su, D. W. Berry, N. Wiebe, N. Rubin, and R. Babbush, Fault-tolerant quantum simulations of chemistry in first
+quantization, PRX Quantum2, 040332 (2021), arXiv:2105.12767.
+[61] M. K. Bhaskar, S. Hadfield, A. Papageorgiou, and I. Petras, Quantum algorithms and circuits for scientific computing,
+Quantum Information and Computation16, 197 (2016), arXiv:1511.08253.
+[62] T. Häner, M. Soeken, M. Roetteler, and K. M. Svore, Quantum circuits for floating-point arithmetic, inReversible
+Computation (RC 2018), Lecture Notes in Computer Science, Vol. 11106 (2018) pp. 162–174, arXiv:1807.02023.
+[63] Throughout this section, round denotes nearest-integer rounding, with half-integer ties away from zero. Because each
+result is accumulated modulo2 n in an n-bit register, we measure the error betweena and b by the circular distance
+minm∈Z |a−b + m2n|, so that values that differ only by wraparound count as close. Behavior outside the promised domain
+is unrestricted.
+[64] D. W. Berry, C. Gidney, M. Motta, J. R. McClean, and R. Babbush, Qubitization of arbitrary basis quantum chemistry
+leveraging sparsity and low rank factorization, Quantum3, 208 (2019), arXiv:1902.02134.
+[65] S. McArdle, A. Gilyén, and M. Berta, Quantum state preparation without coherent arithmetic, Physical Review Letters
+136, 240603 (2026), arXiv:2210.14892.
+[66] Y. R. Sanders, D. W. Berry, P. C. S. Costa, L. W. Tessler, N. Wiebe, C. Gidney, H. Neven, and R. Babbush, Compilation
+of fault-tolerant quantum heuristics for combinatorial optimization, PRX Quantum1, 020312 (2020), arXiv:2007.07391.
+[67] Z. Li and G. K.-L. Chan, Spin-projected matrix product states: Versatile tool for strongly correlated systems, Journal of
+Chemical Theory and Computation13, 2681 (2017).
+[68] S. Sharma, K. Sivalingam, F. Neese, and G. K.-L. Chan, Low-energy spectrum of iron-sulfur clusters directly from
+many-particle quantum mechanics, Nature Chemistry6, 927 (2014), arXiv:1408.5080.
+[69] G. H. Low, R. King, D. W. Berry, Q. Han, A. E. DePrince, III, A. White, R. Babbush, R. D. Somma, and N. C. Rubin, Fast
+14
+quantum simulation of electronic structure by spectral amplification, Physical Review X15, 041016 (2025), arXiv:2502.15882.
+[70] A. J. Walker, An efficient method for generating discrete random variables with general distributions, ACM Transactions
+on Mathematical Software3, 253 (1977).
+[71] M. D. Vose, A linear algorithm for generating random numbers with a given distribution, IEEE Transactions on Software
+Engineering17, 972 (1991).
+[72] J. Lee, D. W. Berry, C. Gidney, W. J. Huggins, J. R. McClean, N. Wiebe, and R. Babbush, Even more efficient quantum
+computations of chemistry through tensor hypercontraction, PRX Quantum2, 030305 (2021), arXiv:2011.03494.
+[73] H. Lamm, S. Lawrence, and Y. Yamauchi, General methods for digital quantum simulation of gauge theories, Physical
+Review D100, 034518 (2019), arXiv:1903.08807.
+[74] M. Carena, H. Lamm, Y.-Y. Li, and W. Liu, Improved Hamiltonians for quantum simulations of gauge theories, Physical
+Review Letters129, 051601 (2022), arXiv:2203.02823 [hep-lat].
+[75] The resource estimate of Osorio Perezet al.[37] uses a103 lattice. In this work, we use43 for ease of evaluation.
+[76] E. J. Gustafson, Y. Ji, H. Lamm, E. M. Murairi, S. Osorio Perez, and S. Zhu, Primitive quantum gates for an SU(3) discrete
+subgroup:Σ(36×3), Physical Review D110, 034515 (2024), arXiv:2405.05973 [hep-lat].
+15
+EXTENDED DATA
+(a) Ideation
+Instructions
+From the task specification alone, propose up to
+five distinct circuit architectures that reduce
+executed Toffolis and peak live qubits. Give one
+implementable datapath per family; merge families
+with the same main datapath.
+Task specification
+TASK SPECIFICATION(complete):
+Task:|x⟩|h⟩ → |x⟩|hXORx−1⟩inF 24, with
+0−1 = 0andp(X) =X 4 +X+ 1.
+Interface:preserve four-qubitxand XOR the
+result into arbitrary four-qubith. Be exact for
+everyx, h, clean every ancilla, and leave zero
+global phase.
+Model:X, CNOT, Toffoli, SWAP, phase gates, and
+corrected X-basis measurement; emission-time
+classical computation is allowed.
+Example structured response
+F1 Fermat chain:computex 14 by free squarings and
+field multiplications.
+F2 Full lookup:select one of 16 inverse words
+with QROM.
+F3 Tower field:change basis and invert through
+F(22 )2.
+(b) Evolutionary rewrite
+Instructions
+Task:Optimize a reversible circuit forF 24 inversion.Objective:
+Minimize executed Toffoli×peak live qubits.API:alloc/free, ccx, free
+Clifford gates, and corrected measurement-based uncomputation. Return the
+complete Python program; the evaluator is ground truth.
+Discoveries:Print up to three lines beginning DISCOVERY:; these notes
+travel with the program.
+Parent and feedback
+# Parentfitness=<score>, qubits=<Q>, toffoli=<T>
+#FOUNDING DIRECTION –- F1 Fermat chain
+[complete selected parent program]
+# Feedback[phase costs and evaluator output]
+–DISCOVERY:squaring in a binary field is CNOT-only.
+# Archive context[recent attempts; complete elite and cell-diverse
+inspiration programs]
+# TaskRewrite the parent to improve fitness; return the complete program.
+Model–tool transcript
+MODEL→run_candidate([Fermat chain], trial_eval=true)
+TOOL RESULT→valid:executed_toffoli=66; qubits=20
+MODEL→run_candidate([five products], trial_eval=true)
+TOOL RESULT→invalid:ancilla t not returned to|0⟩at free
+MODEL→run_candidate([+ measured uncompute], trial_eval=true)
+TOOL RESULT→valid:executed_toffoli=5; qubits=10
+(c) Model–evaluator loop
+· · ·
+b = Builder()
+x = b.alloc_qubits(4)
+h = b.alloc_qubits(4)
+t = b.alloc_qubit()
+b.ccx(x[0], x[1], t)
+# four more products
+b.cx(t, h[0])
+b.free(t)
+b.emit()
+INVALID
+t not returned
+to| 0⟩at free
+T = 5 Q = 10
+T Q-cost =∞
+LLM
+b = Builder()
+x = b.alloc_qubits(4)
+h = b.alloc_qubits(4)
+t = b.alloc_qubit()
+b.ccx(x[0], x[1], t)
+# four more products
+b.cx(t, h[0])
+m = b.hmr(t)
+b.cz(x[0], x[1], cond=m)
+b.free(t)
+b.emit()
+VALID
+T = 5 Q = 10
+T Q-cost = 50
+· · ·
+Candidate program
+Rewritten program
+Evaluator
+Evaluator
+Extended Data Figure 1Sample inputs and outputs for inversion inF24. (a) During ideation, the LLM is given
+the complete task specification but no prior implementation and returns distinct candidate architectures. (b) During
+evolution, the input additionally contains a selected parent program, its evaluator feedback, and limited archive context;
+the LLM returns a proposed rewrite. (c) One such rewrite computes the inverse with five nonlinear products but fails
+to return an ancilla to|0⟩, so the evaluator rejects it. Seeing this feedback, the LLM adds MBU; the resulting circuit
+is valid withT= 5,Q= 10, and aT Q-cost of 50.
+16
+140 160 200 250 300
+Peak qubits Q
+1,500
+2,000
+2,500
+3,000
+Toﬀoli countT
+0
+20
+40
+60
+80
+94
+Evolution iteration
+Extended Data Figure 2Search lineage for the Gaussian circuit in the resource plane. Each marker is a distinct
+valid circuit, colored by the iteration in which it was discovered; arrows point from each parent to its mutated child.
+Dashed curves are contours of constantT Q-cost, which decreases toward the lower left. The ring marks the discovered
+circuit atT= 1,583andQ= 139.
+17
+Extended Data Table 1Main results across eight compilation tasks. Input/output gives the number of qubits in read-only input registers and
+target registers, respectively; a target may carry an initial value and be updated in place, and “—” denotes a task with no target register. The
+correctness columns give the error tolerance and the number of tests. The resource columns report Toffoli countT and peak qubit countQ for the
+baseline and discovered circuits;GT Q= (T Q)baseline/(T Q)ours. HHL: Harrow–Hassidim–Lloyd.
+Correctness criteria Resources
+Task Details Input/output Error tolerance Tests Baseline(T , Q)Ours(T , Q) GT Q
+Prime-field modular inversion SI II512/512Failure budget≤2·10 −4 [8, 38]10 5 —† (4.0·106,935) —
+Reed–Solomon DQI decoder SI I.1840/— Failure budget≤10 −3 105 (5.1·106,1,938)[13](4.4·10 5,1,837) 12
+Hermitian DQI decoder SI I.2738/— Failure budget≤10 −3 105 (1.0·108,1.9·10 5)‡[39](9.3·10 5,2,395) —‡
+HHL rotation angle SI III.121/33<10 −7 rad9·10 3 (1.6·104,300)[12](1,348,115) 32
+Coulomb potential SI III.248/25≤2·10 −6 absolute error9·10 3 (6,355,252)[12](1,140,142) 9.9
+Fixed-point Gaussian SI III.339/39<10 −7 absolute error9·10 3 (2.4·104,362)[12](1,583,139) 39
+Fe2S2 alias–SelectSI IV32/40Exact on the entire domain2·10 7 (5.5·104,139)[4](1.5·10 4,126) 4.1
+Nonabelian lattice-gauge simulation SI V1,728/51Exact on the entire domain10 5 (1.3·106,1,927)[37](1.7·10 5,1,859) 7.7
+† Costs are for the complete benchmark circuit of SI II, whose cost is dominated by modular inversion. Several prior implementations trade Toffolis
+against qubits differently (Table S3) [8, 38, 40], so we report no single baseline or gain. Separately from the divstep design reported in the table, we
+specialize Luo’s space-efficient construction, reducing its Toffoli count by a factor of3.4at the cost of five additional qubits (SI II.2).
+‡ Naïve reversible implementation; no prior reversible compilation exists in the literature.
+1
+SUPPLEMENTARY INFORMATION
+I Syndrome decoding for DQI 1
+I.1 Reed–Solomon decoding for OPI . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2
+I.2 Hermitian-code decoding for HOPI . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+II Prime-field modular inversion 10
+II.1 Divsteps . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+II.2 Specialized Euclidean construction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+IIINumerical function evaluation 16
+III.1 HHL rotation angle . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17
+III.2 Coulomb potential . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 18
+III.3 Fixed-point Gaussian . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 19
+IVQuantum chemistry simulation 19
+V Nonabelian lattice-gauge simulation 23
+Appendix 27
+A Exact branch recovery for divstep inversion 27
+I. SYNDROME DECODING FOR DQI
+Consider an optimization problem over a finite fieldFq. An assignment x∈F nq produces m linear values Bx. Given
+a set Fi ⊂F q of acceptable values for each constraint, letf (x) = |{i : (Bx)i ∈F i}| count the constraints satisfied byx;
+the goal is to maximizef (x). This family, known as max-LINSAT, includes linear constraint-satisfaction problems
+such as Max-Cut and max-XORSAT, as well as nearest-codeword problems and polynomial fitting over finite fields.
+Decoded quantum interferometry (DQI) is a quantum algorithm that aims to solve these optimization problems by
+arranging for constructive interference on assignments satisfying many constraints and destructive interference on
+assignments satisfying fewer [1].
+DQI prepares a superposition over sparse vectorse∈F mq , each supported on at mostℓ constraints. Here H = BT
+can be viewed as a parity-check matrix, makinge a low-weight error andHe its syndrome. If the associated code has
+minimum distance dmin ≥ 2ℓ + 1, a decoder can recovere uniquely from that syndrome. DQI uses the decoder in the
+following state-preparation sequence:
+X
+wt(e)≤ℓ
+ae |e⟩ |0⟩
+s=He
+− − − − − →
+X
+wt(e)≤ℓ
+ae |e⟩ |He⟩
+uncomputee
+− − − − − − − − → |0⟩
+X
+wt(e)≤ℓ
+ae |He⟩
+QFT−1
+− − − − − →
+X
+x
+Ax |x⟩.
+(23)
+The middle step must erasee while retaining its syndromes = He; otherwise the different contributions remain
+distinguishable and cannot interfere. The inverse quantum Fourier transform (QFT) then produces amplitudesAx
+that favor assignments satisfying more constraints. The dominant cost in Equation (23) is uncomputinge, which
+requires solving a classical decoding problem; DQI thus reduces optimization to decoding.
+The space-efficient construction of Khattaret al.[13] replaces the middle decoding-and-uncomputation step with
+a phase correction. It generates one field symbolei at a time, adds its contribution tos, and then removes it with
+anX-basis measurement. This avoids retaining allmsymbols ofe, but the measurement outcomesc i leave a known
+phase. We expand each symbol ofe∈F mq in the fixed binary basis used by the circuit, so thatc and e are bit strings
+of equal length; the phase is then(−1)⟨c,e⟩2, where ⟨·,·⟩ 2 denotes the binary inner product. We callc themask. In this
+section, we use a fixed, randomly chosen mask. A reversible decoder must remove this phase usings, after which the
+inverse Fourier transform produces the desired interference over assignmentsx. The case studies below isolate and
+optimize this decoder-dependent phase correction. We require
+|s⟩ 7− →(−1)⟨c,e(s)⟩2 |s⟩.(24)
+We study two instances of DQI. In optimal polynomial intersection (OPI),x specifies a univariate polynomial and
+the constraints restrict its values at prescribed points on a line; the associated code is a Reed–Solomon code. Hermitian
+2
+optimal polynomial intersection (HOPI) generalizes this picture from a line to a Hermitian curve:x specifies a function
+on the curve, the constraints restrict its values at curve points, and the corresponding code is a Hermitian code [41].
+Table S1 lists the parameters of the two benchmark instances.
+TABLE S1Parameters of the two DQI decoding instances. The syndrome-input column gives the number of
+syndrome symbols and the bits per symbol;ℓ is the maximum decoded error weight. The last column compares
+expected satisfied fractions for ideal DQI and a single trial of Prange’s information-set decoding [42], which is the best
+known efficient classical algorithm for these instances.
+Problem Code field Positions Syndrome inputℓDQI/Prange
+OPIF 212 4,095 70×12 35 0.5763/0.5009
+HOPIF 64 512 123×6 47 0.7145/0.5726
+We test implementations on syndromes drawn from the DQI input distribution (defined by|ae|2) and accept
+implementations with at most 100 detected wrong signs in 100,000 tests. Letε be the failure probability: the total
+probability, under this distribution, of the inputs on which the circuit fails. A failure applies the wrong sign or resets
+an ancilla that still holds input-dependent data. The discovered circuit satisfies [16]
+⟨f⟩ impl − ⟨f⟩ ≤4ε⟨f⟩.(25)
+Under our testing framework, a wrong sign is detected with probability at least12: for any fixed input, whether the
+sign is wrong is given by a constant plus a linear function (modulo 2) of the uniformly random measurement record,
+and a reset of a nonzero qubit adds a fresh uniformly random bit to the sign. Thus the acceptance limit of 100 failures
+in 100,000 tests givesε≤ 2.434 × 10−3 at97 .5%confidence. At that value, Equation (25) bounds the loss in satisfied
+fraction by5 .6 × 10−3 (Reed–Solomon) and7 .0 × 10−3 (Hermitian)—at most7 .4%and4 .9%of the two instances’
+advantage over single-trial Prange.
+I.1. Reed–Solomon decoding for OPI
+We use the Reed–Solomon instance and reversible decoder of Khattaret al.[13] as our baseline. Letγ be a primitive
+element ofF 212. An error worde∈F 4095212 produces 70 syndromes
+Si =
+4094X
+j=0
+ejγij, i= 1, . . . ,70.(26)
+This syndrome map defines a[4095, 4025, 71]212 Reed–Solomon code. The 70 twelve-bit syndromes occupy 840 qubits.
+Assuming the error weight is at most 35, the decoding task is to recover the error from the syndromes.
+Decoding proceeds in two stages: first find the positions of the errors, then recover their values inF212. The first
+stage packages the unknown set of error positions into a single polynomial. For each nonzero error symbolej, include
+one factor1−γ jz, giving
+σ(z) =
+Y
+j:ej ̸=0
+(1−γ jz).(27)
+The factor associated with positionj vanishes at z = γ−j, so the roots ofσ identify exactly the positions at which the
+error word is nonzero. The decoder’s first task is therefore to recover thislocator polynomialfrom the syndromes. The
+input|s⟩supplies the first 70 syndromes, which we collect into a polynomial
+S(z) =S 1 +S 2z+· · ·+S70z69.(28)
+Summing the geometric series in Equation (26) shows that the productσ(z)S(z)agrees, through degree 69, with a
+polynomialω(z)of degree less thandegσ, called theerror-evaluator polynomial:
+σ(z)S(z) =ω(z) (modz 70).(29)
+The decoder recovers the locatorσ of least degree and the corresponding evaluatorω from thiskey equation. The
+baseline does so with the extended Euclidean algorithm (EEA) applied toS(z)and z70. It repeatedly divides the
+3
+higher-degree polynomial by the lower-degree one, replaces the former by the remainder, and stops when the remainder
+has degree below 35. That remainder isω, and the coefficient that accompanies it isσ, up to normalization. The
+promise of at most 35 errors ensuresdegσ≤35and determines this pair uniquely.
+The baseline next locates the errors by evaluatingσ at every possible position. Associate positionj with the field
+point βj = γ−j (since γ is primitive, these points enumerate all 4,095 nonzero field elements). The scan visits them
+one by one and tests whetherσ(βj) = 0. It need not evaluateσ independently each time: advancing toβj+1 = γ−1βj
+multiplies its degree-r term by the fixed constantγ−r. This efficient scan is known as a Chien search [43]. Finding a
+root reveals an error’s position but not its value. Atβj, the evaluatorω(βj)contains the error value multiplied by the
+contributions of the other locator factors, while the formal derivativeσ′(βj)—the usual coefficientwise polynomial
+derivative over the field—contains those same factors without the error value. Their ratio therefore isolatesej, up to a
+fixed factorκ j that depends only on the position:
+ej =κ j
+ω(βj)
+σ′(βj) .(30)
+This recovery step is Forney’s formula [44]. The circuit immediately uses that value and the matching twelve-bit block
+cj to apply the phase (24). It then reverses the computation to restore the syndrome and clear its ancillas.
+The EEA is the dominant cost of this baseline because its classical control flow depends on the syndromes: different
+inputs require different shifts, swaps, and numbers of iterations. A quantum circuit must instead apply one fixed
+sequence of gates across the syndrome superposition. The baseline therefore spreads the Euclidean solve over 222
+synchronized cycles, controlling each operation so that it acts only when needed. Our implementation of this baseline,
+based on the authors’ released code [35], uses 5.1 million Toffoli gates and 1,938 qubits at peak, with the forward
+Euclidean solve and its reversal accounting for 3.8 million of the Toffolis [45].
+Thediscoveredcircuitchangesbothstagesofthisbaseline. First, itreplacestheEuclideansolvewiththearithmetically
+cheaper Berlekamp–Massey (BM) recurrence and arranges the recurrence so that reversibility does not require retaining
+much history state. Second, although the decoded error word contains 49,140 bits, DQI extracts only the single bit
+⟨c, e⟩2 from it. The circuit therefore computes this phase bit directly from the locator and syndromes rather than
+materializing the full decoded error, and it precomputes one reciprocal polynomial so that no field division is performed
+during the scan.
+An alternative to solving the key equation by EEA is the standard BM algorithm, which recovers the locator from a
+linear recurrence among the syndromes. We first review how BM reads Equation (29) one coefficient at a time. Write
+σ(z) = PLk=0 σkzk, where L = degσ. The coefficient ofzr−1 in σ(z)S(z)is the convolution PLk=0 σkSr−k. Because
+degω < L, the key equation requires every such coefficient from degreeLthrough degree 69 to vanish:
+0 = [zr−1]σ(z)S(z) =
+LX
+k=0
+σkSr−k, r=L+ 1, . . . ,70.(31)
+Since we can setσ0 = 1without loss of generality, and subtraction is the same as addition inF212, every syndrome
+after the firstLsatisfies
+Sr =σ 1Sr−1 +· · ·+σLSr−L.(32)
+Thus the locator coefficients give a rule for predicting each syndrome from the precedingL syndromes. We call L
+theorderof this recurrence. BM finds this recurrence by maintaining a candidate locatorσ and refining it as the
+syndromes are incorporated [46]. At the start of roundr, the candidate defines a lowest-order recurrence for the
+already processed syndromes S1, . . . , Sr−1. The round tests whether that recurrence also fitsSr. The discrepancy
+∆ = PLk=0 σkSr−k is the sum in Equation (31) for roundr, computed with the current candidate. It measures the
+amount by which the recurrence fails:∆ = 0means that the current candidate already fitsSr, while∆ ̸= 0requires
+the candidate to be refined.
+When∆ ̸= 0, BM needs a correction that fixes the equation forSr without invalidating any of the earlier equations.
+For this purpose, it retains an earlier candidateτ as a correction template, together with the nonzero discrepancyδ
+that candidate produced. At the start of each subsequent round, BM multipliesτ by z, shifting every coefficient one
+degree higher as the recurrence advances to the next syndrome. Thus, if the template was savedk rounds earlier, it has
+acquired a factorzk and is aligned with the current syndrome equation while leaving the earlier equations unchanged.
+BM then scales this aligned template byα = ∆/δ and applies σ←σ−ατ : at Sr, the correction contributes exactly
+αδ= ∆and so cancels the discrepancy.
+On a round with a nonzero discrepancy, BM must also decide whether the current candidate takes over as the
+template. A candidate of orderL that fits n syndromes has predictedn−L of them. BM seeks the recurrence of
+4
+lowest order, and a correction raises the order less when its template had predicted more syndromes at the time it was
+saved. BM therefore replaces the template when the current candidate has predicted more syndromes than the stored
+template had when it was saved, and retains it when the current candidate has predicted fewer. When the two counts
+are equal, either choice gives a correct decoder [46, p. 125]. Textbook BM retains in that case. The circuit instead
+chooses to replace, which reduces the history it must store (see “Reconstructing BM history” below).
+The circuit makes this decision with a signed counterd. The counter is nonnegative whenever a replacement is
+required and negative whenever the template must be retained; when the counts are equal it may have either sign.
+Starting from(σ, τ, δ, d) = (1,1,1,0), each roundr= 1, . . . ,70applies
+eτ=zτ,∆ =
+min(degσ,r−1)X
+i=0
+σiSr−i,
+(σ, τ, δ, d)←
+
+
+
+(σ,eτ , δ, d+ 1),∆ = 0,
+(σ−(∆/δ)eτ , σ,∆,−d),∆̸= 0, d≥0,
+(σ−(∆/δ)eτ ,eτ , δ, d+ 1),∆̸= 0, d <0.
+(33)
+After the final round,σis the error locator.
+Adaptive coefficient ranges.A naïve implementation would apply every BM update across all 36 possible coefficient
+positions in every round. Even in the worst case, this is unnecessary: afterr syndromes have been processed, only
+coefficients through degreemin(r, 35)can be active, so the update range need only grow by one position per round.
+The dashed line in Figure S1(b) shows this worst-case bound. On the DQI input distribution, however, the candidate
+polynomials typically grow more slowly still. A degree-L locator σ has L unknown coefficients after fixingσ0 = 1,
+while its evaluatorω, whose degree is less thanL, has at mostL unknown coefficients. Since each syndrome supplies
+one coefficient constraint,r syndromes typically determine a locator of degreeL≈r/ 2, consistent with the samples in
+Figure S1(b).
+The discovered circuit exploits this typical behavior, at the price of failing on rare inputs. Before compiling the
+circuit, we classically simulate BM on the DQI input distribution to choose a cutoffk for each round. The circuit then
+updates only the prefixσ0, . . . , σk, treating higher coefficients as zero. The prefixes expand as the rounds progress,
+which produces the rising per-round cost in Figure S1(a).
+Shared BM updates.Compiled directly, the two correction cases of Equation (33) would produce two separately
+controlled arithmetic paths. Only one path acts on any basis state, but both would appear in the fixed circuit and
+contribute to its Toffoli count. The main text shows how the circuit avoids this (Equation (5)). Under a flag that
+marks the replace case, it exchangesσ with the shifted templateeτ. One shared update then subtracts a multiple of
+the template register from the locator register. The multiplier isα in the retain case andα−1 in the replace case. The
+replace result differs from the standard update only by the nonzero factor−α−1 and therefore has the same roots.
+The circuit also stores no discrepancyδ. The rescaled update maintains the invariant
+σ0δ= 1.(34)
+Theinvariantholdsinitially. Theshiftedtemplatehaszeroconstantcoefficient, sotheretaincasechangesneither σ0 nor δ.
+In the replace case, the new constant coefficient comes entirely from the correction term:σ0 ←α −1σ0 = (δ/∆)σ0 = ∆−1,
+while δ← ∆. The circuit therefore readsδ = σ−10 from the locator. In each round it forms the product∆σ0, which
+equals α, and inverts it. A controlled selection between the product and its inverse supplies the multiplier for the
+shared update.
+Reconstructing BM history.Reversing a round requires the discrepancy that the round used, which the round
+computes into a temporary register. Keeping a twelve-bit history word for every round would raise the qubit count to
+2,677. A replace round leavesσ0 = ∆−1 by Equation (34), so the locator determines the round’s discrepancy. The
+circuit therefore erases the temporary discrepancy register by MBU, and the reverse pass recomputes the erased value
+from the locator. A round with∆ = 0changes nothing and has nothing to recover.
+A retain round with∆̸= 0is the exception. No exchange occurs andσ0 is unchanged, so the constant coefficient that
+reveals the discrepancy on a replace round carries no trace of it here. The current∆remains only in the temporary
+discrepancy register, and the circuit stores it on the history stack before erasing that register. A stack that never
+overflows needs 35 entries, or 665 qubits.
+Retain rounds are rare on the DQI input distribution. Starting fromd = 0, a run of nonzero discrepancies repeatedly
+selects replace and leavesd = 0. A zero discrepancy raisesd; a later replacement can then make it negative, producing
+retain rounds whiled returns to zero. Such accidental zero discrepancies are uncommon overF212 before the locator
+reaches its final degree. Once it has, subsequent discrepancies stay zero and do not start new runs of retain rounds.
+5
+0 70 140 210
+Step
+0
+4000
+8000Toﬀolis per step
+(a) Key-equation schedules
+Synchronized Euclid: 1.9M Toﬀolis
+BM schedule: 140k Toﬀolis
+0
+10
+20
+30degσ
+(b) Locator degree and discrepancy stack
+W orst-case upper bound
+0 10 20 30 40 50 60 70
+Round r
+0
+2
+4
+Stack
+10−610−3 100
+Fraction of
+decodes
+1.0×10−4
+FIG. S1The Reed–Solomon decoder. (a) Measured forward Toffoli cost per step: one cycle of the 222-cycle
+synchronized EEA baseline of Khattaret al.[13], or one round of our 70-round BM decoder. (b) Locator degree (top)
+and number of stored discrepancies (bottom) by round, across 20,000 samples drawn from the DQI input distribution,
+with one sample highlighted; the dashed line is the worst-case degree boundmin(r, 35). The right-hand panels show
+the final locator-degree distribution and the distribution of maximum discrepancy-stack depth. Inputs in the hatched
+region need more than the one allocated stack entry and may produce a wrong sign; this occurs with probability
+1.0×10 −4.
+Consequently, most inputs need few saved discrepancies. The discovered circuit allocates only one stack entry, which
+costs 19 qubits (Figure S1(b)).
+Across 400 million samples from the DQI input distribution, the two failure modes (overflow of the one-entry stack
+and activation of a coefficient beyond the cutoff) occur with a combined probability of1.4 × 10−4. This completes
+locator construction; the circuit next forms the evaluatorω, which will be used together withσ to compute the required
+phase.
+In-place construction of the evaluator polynomial.The key equation(29) gives ω by multiplying the locator by
+the syndrome polynomial. The circuit first normalizesσ so that σ0 = 1. This leaves the locator roots unchanged, and
+the corresponding ω acquires the same nonzero factor, so the ratioω/σ ′ used to recover the error values is unchanged.
+Writeω <35 = (ω0, . . . , ω34)for the first 35 coefficients ofω:
+(σ;S 1, . . . , S35;S 36, . . . , S70)7− →(σ;ω<35 =σSmodz 35;S 36, . . . , S70).(35)
+With this normalization, each output coefficient is
+ωi =S i+1 +
+iX
+j=1
+σjSi−j+1,0≤i <35,(36)
+so it equals the syndrome symbol being overwritten plus a function of earlier symbols. The transformation is therefore
+reversible: the circuit can overwrite the first 35 syndrome symbols with the first 35 coefficients ofω and later restore
+them. This avoids a separate 420-qubit register forω. The same map extends to all 70 syndrome symbols; by the
+key equation, the coefficients ofσS from degree 35 through 69 vanish whenever the locator is correct, so the last 35
+become zero and serve as workspace until the map is reversed.
+Phase-only error recovery.At this point the decoder could useσ and ω to recover every error value. An ordinary
+decoder does so by applying Forney’s formula(30) to construct the twelve-bit field elementej at each located error.
+The DQI task(24), however, needs only the single accumulated parityPj⟨cj, ej⟩2. Constructing all twelve bits of
+each ej only to retain one parity would waste most of this work, so the discovered circuit computes the required phase
+bit directly.
+Any parity of a field element can be expressed as a field trace after multiplication by a fixed constant. In particular,
+withTr(x) = P11r=0 x2r ∈F 2, the twelve mask bitscj determine a unique elementµj ∈F 212 such that
+⟨cj, ej⟩2 = Tr(µjej).(37)
+6
+Part of the total phase is linear in the supplied syndromes and can be applied with CliffordZ gates. Choosing that
+linear part offline cancels the mask at 71 positions and leaves residual constantseµj at the remaining 4,024 positions to
+scan.
+At each remaining position the circuit tests whetherβj is a root of the locator. If it is, the error word is nonzero
+there. Absorb the fixed factorκj from Forney’s formula intoνj = eµjκj. Substituting that formula directly into the
+trace gives the residual phase bit
+Tr(eµjej) = Tr
+
+νj
+ω(βj)
+σ′(βj)
+
+,(38)
+without materializinge j.
+Precomputed reciprocal.The quotient in Equation (38) is required only at the roots ofσ, of which there are at
+most 35. A quantum circuit, however, applies one fixed gate sequence to every syndrome in the superposition, so it
+cannot skip the positions that are not roots. A direct implementation would therefore perform the division at each of
+the 4,024 positions, and this division would dominate the decoder’s cost.
+The circuit instead performs one division before the scan. Because only the values at the roots matter, any function
+that agrees with1/σ′ there serves equally well. The roots ofσ are distinct, soσ′ is nonzero at each of them, and a
+single polynomialΨof degree less than degσ takes the value1/σ′(β)at every root β. Equivalently,Ψ σ′ ≡ 1 ( modσ ).
+EvaluatingΨand ω at a fixed point is linear in their coefficients and uses only CNOTs, so the residual phase bit
+becomes
+Tr(eµjej) = Tr
+ 
+νj ω(βj) Ψ(βj)
+
+,(39)
+which is bilinear inω(βj)andΨ( βj). In a basis ofF212 over F2, it splits into 12 terms, each the product of one parity
+of the bits ofω(βj)with one parity of the bits ofΨ(βj). The parities cost only CNOTs, and each product costs one
+Toffoli, applied only when the root test succeeds. The root test itself is a zero test on the twelve bits ofσ(βj)and
+costs 11 Toffolis, so each position costs11 + 12 = 23Toffolis.
+ComputingΨis itself a division:Ψis the inverse of σ′ modulo σ. The circuit computes it with the EEA (the
+algorithm that BM replaced for the key equation) on a smaller problem. Two observations make it affordable.
+The Toffoli cost of the EEA grows roughly with the square of the operand degree. The first observation halves that
+degree, which cuts the Toffoli cost to about a quarter. In characteristic 2, squaring is linear:(a + b)2 = a2 + b2. It
+therefore acts on the twelve bits of a field element as a fixed linear map, as does its inverse, the square root, and both
+cost only CNOTs. Group the coefficients ofσby the parity of their degree:
+σ(z) =
+ 
+σ0 +σ 2z2 +σ 4z4 +· · · +z  σ1 +σ 3z2 +σ 5z4 +· · ·.(40)
+Each group is a polynomial inz2 and hence a square,σ0 + σ2z2 + · · ·=  √σ0 + √σ2 z + · · ·2, soσ(z) = E(z)2 + z O(z)2
+with Ei = √σ2i, Oi = √σ2i+1, and degE,degO≤ 17. In characteristic 2 the derivative of any square is zero, since
+(f 2)′ = 2f f′, so σ′ = O2. The polynomials E and O share no factor, because a common factor would divide bothσ
+and σ′. The EEA on this half-degree pair(E, O)returns A and B of degree at most 17 withAE + BO = 1. Then
+BO = 1 + AE, so( B2 + zA2) σ′ = (BO)2 + zA2O2 = 1 + A2E2 + zA2O2 = 1 + A2σ, and B2 + zA2 agrees withΨat
+every root ofσ. Forming E and O from σ, and B2 + zA2 from( A, B), uses only square roots and squares. The only
+costly step, the EEA, thus runs on degree-17 rather than degree-35 operands.
+The second observation concerns qubit usage. A fresh register forΨwould raise the peak qubit count by 420.
+Instead, the circuit makes room inside the syndrome register itself. As described above, the in-place product over all 70
+syndrome symbols leavesω in the first 35 and zeros in the last 35 on every correct decode. The circuit storesA and B
+in these zeroed words and evaluatesΨ(βj) = B(βj)2 + βjA(βj)2 at each position with CNOTs only. After the scan, it
+reverses the Euclidean pass, which returns these words to zero, and then reverses the product to restore the syndromes.
+Unlike the baseline’s Euclidean solve, this pass follows a fixed schedule. Every input runs the same 17 elimination
+blocks. Each block parks its quotients in the coefficient words that it clears, so the pass needs no separate history.
+In total, the 4,024-position scan costs 93,000 Toffolis, and the Euclidean pass 44,000 in each direction, compared
+with 1.3 million for the baseline’s scan. The scan’s Toffoli count barely depends on the choice ofc: every scanned
+position uses the same 23-Toffoli circuit, and a differentcchanges the number of scanned positions by at most one.
+The discovered circuit uses 440,000 Toffolis and 1,837 qubits, for aT Q-cost of8.1×108. Relative to the Reed–Solomon
+baseline, this reduces the Toffoli count by12×, the qubit count by5.2%, and theT Q-cost by12 ×. In 100,000 tests of
+the complete circuit, seven produce the wrong sign.
+7
+I.2. Hermitian-code decoding for HOPI
+HOPI requires the same phase(24) as the Reed–Solomon instance above, but its error word belongs to a 512-symbol
+Hermitian code overF64. A Reed–Solomon code with 512 positions would require symbols of about nine bits, since
+each position needs a distinct field element. A Hermitian code instead obtains 512 positions while retaining six-bit
+symbols by using the points(x, y)∈F264 on
+y8 =x 9 +y.(41)
+Polynomials in x and y are ordered by aweighted degree, the analogue of polynomial degree for Reed–Solomon codes.
+Here x has weight 8 andy has weight 9, so the monomialxayb has weighted degree8a + 9b. These weights give the
+leading terms y8 and x9 of Equation (41) the same weighted degree, 72. Each finite pointPj = (xj, yj)is one code
+position. The syndrome construction is the two-variable analogue of the Reed–Solomon map above. A functionψ(x, y)
+assigns a field value to every position and therefore defines one parity check
+S(ψ) =
+512X
+j=1
+ejψ(Pj).(42)
+The value S(ψ)is one syndrome symbol. This instance uses the 123 monomialsψa,b(x, y) = xayb of weighted degree
+8a + 9b≤ 150[ 41]. We enumerate them asψ0, . . . , ψ122 in increasing weighted degree [47]. The input |s⟩ supplies the
+123 symbols
+Sk :=S(ψ k), k= 0, . . . ,122.(43)
+This syndrome map defines a[512, 389, dmin ≥ 96]64 Hermitian code, so the syndrome uniquely determines every error
+affecting at most 47 positions. The 123 six-bit syndromes occupy 738 qubits. Table S2 lists the correspondences with
+the Reed–Solomon decoder that the rest of this subsection uses.
+TABLE S2Correspondence between the Reed–Solomon and Hermitian decoders.
+Reed–Solomon Hermitian
+Positions 4,095 nonzero field elements 512 points(x, y)on the curve
+Symbol size 12 bits 6 bits
+Check functionsz i xayb
+Ordered by degreeiweighted degree8a+ 9b
+Syndromes 70 123
+Locator polynomialσ(z)functionσ(x, y)
+Evaluatorω=σS ω=σ bS
+Error valueκ j ω/σ ′ ω/σ ′
+As in Reed–Solomon decoding, the first task is to find a locatorσ that vanishes at every error point; here it is a
+function of two variables on the curve. Multiplying each root condition byejψk′(Pj)and summing over positions gives,
+forσ= Pk σkψk,
+0 =S(σψ k′) =
+X
+k
+σkS(ψkψk′).(44)
+This has the same form as the Reed–Solomon recurrence(31): a sum of syndromes weighted by the locator coefficients.
+Whereas multiplying Reed–Solomon monomials simply shifts the syndrome index, the curve relation(41) reduces each
+product ψkψk′ to one or two basis monomials. Beyond error weight 33, some of the syndromes that the recurrence
+needs have weighted degree above 150, which the input does not supply. The Feng–Rao baseline reconstructs these
+missing syndromes by majority voting among recurrence predictions, then uses the extended sequence to locate and
+evaluate the errors [39].
+Our reversible implementation of this baseline uses 100 million Toffolis at a peak of 190,000 qubits, for aT Q-cost of
+2.0 × 1013. The large qubit count comes from retaining the intermediate states of the recurrence updates until the
+circuit reverses the computation.
+The discovered circuit instead turns locator finding into a null-space problem for a symmetric matrixA built directly
+from the supplied syndromes. It never storesA; instead, it computes the effect of multiplying a vector byA directly
+8
+from the syndromes. Repeating this operation produces a sequence of vectors that must eventually become linearly
+dependent, and such a dependence yields the desired null vector. The circuit processes this sequence incrementally,
+retaining only a few vectors at a time and grouping several consecutive vectors when a vector cannot be processed
+alone. Once the null vector supplies a locatorσ, the circuit still avoids constructing the whole evaluatorω or the
+decoded error word. It scans the curve points in small batches calledstripes, combines the locator and syndromes only
+for the current stripe, applies those points’ phase contributions, and clears the temporary data before continuing. The
+circuit thus has two stages: a locator walk that never stores the matrix, and a space-efficient phase scan. The walk
+freezes on the rare inputs that need extra work and repairs them at scheduled rounds. Its reversal recomputes most
+decisions and stores one bit per round.
+The locator as a null vector.The discovered circuit looks for the locator in a fixed space that is large enough to
+always contain one. Following the linear-algebra strategy of Skorobogatov and Vlăduţ[48], it uses the span of the 48
+monomials ψ0, . . . , ψ47 of weighted degree at most 75. Writingσ = P47k=0 σkψk, each error point imposes one linear
+condition P47k=0 σkψk(Pj) = 0on the 48 coefficients. There are at most 47 conditions on 48 unknowns, so a nonzero
+locator always exists.
+The error points are unknown, so the circuit cannot impose these conditions directly. It replaces them with a
+condition that it can compute from the syndromes. Define the symmetric48× 48matrix Akk′ = S(ψkψk′). Each
+product ψkψk′ has weighted degree at most 150, so every entry ofA is a linear function of the supplied syndromes.
+The coefficient vectorσ = (σ0, . . . , σ47)T of every locator lies in the null space ofA, and almost always the converse
+holds as well.
+To see this, letEbe the set of error points and letMjk =ψ k(Pj)forP j ∈ E. Then
+A=M T diag(ej)M, Mσ= (σ(P j) :P j ∈ E)T.(45)
+A locator hasMσ = 0and therefore Aσ = 0. Conversely, when the conditionsσ(Pj) = 0are independent, M has
+full row rank. The error values are nonzero, soAσ = 0then implies Mσ = 0, and σ is a locator. The conditions are
+dependent with probability≈8×10 −8 under the DQI input distribution.
+Applying A without storing it.The circuit needs only the product Au for a given vectoru. Computing it
+directly would take482 = 2,304field multiplications. Let U = Pk ukψk be the function with coefficient vectoru.
+Then( Au)k′ = S(ψk′U ): each entry is the syndrome of a product of two functions. Every such product lies in the
+span of the 123 monomials, so its values at 123 suitably chosen curve pointsR1, . . . , R123 determine it. On this span
+the syndrome is therefore a weighted sum of point values,S(f ) = P123i=1 ηif (Ri), with weightsηi that are a fixed linear
+function of the supplied syndromes. WritingΦik =ψ k(Ri)gives
+Au= Φ T diag(η)Φu.(46)
+HereΦ u evaluates U at the points, the diagonal map multiplies each value by its weight, andΦT returns the weighted
+values to the 48 coefficients. The mapsΦandΦT are fixed and linear, so they cost only CNOTs. The only Toffolis
+are in the 123 pointwise products, each a 15-Toffoli multiplication inF64 [49, 50]. One application ofA thus costs
+123 × 15 = 1,845Toffolis. The same pattern recurs below, and we call itevaluation–interpolation: the circuit evaluates
+at fixed points, multiplies the values pointwise, and maps the products back linearly.
+Lanczos recurrence.A null vector of A can be found from repeated applications ofA. Starting from a fixed seed
+y0, generate theKrylov vectorsy0, Ay0, A2y0, . . .. They all lie in a 48-dimensional space, so they must become linearly
+dependent: there are coefficients, not all zero, withλ0y0 + λ1Ay0 + · · ·+ λN AN y0 = 0. If the seed is not orthogonal to
+the entire null space, symmetry forcesλ0 = 0. To see this, choosev in the null space ofA with vTy0 ̸= 0. Symmetry
+givesv TAry0 = 0forr≥1, so the inner product of the dependence withvleavesλ 0vTy0 = 0. Then
+σ=
+NX
+r=1
+λrAr−1y0, Aσ=
+NX
+r=1
+λrAry0 = 0(47)
+is the desired null vector. In the rare case whereλ0 ̸= 0, the decoding fails.
+Used directly, this would require storing every Krylov vector until the dependence appears. The Lanczos algorithm
+avoids that. It maintains an orthogonal basisw0,w 1, . . .whose first r + 1vectors span the first r + 1Krylov vectors:
+it applies A to the newest basis vector and subtracts the components along the existing basis. BecauseA is symmetric,
+Awr is already orthogonal to every basis vector exceptwr−1 andw r, so
+Awr ∈span{w r−1,w r,w r+1}.(48)
+Constructing the next vector therefore needs only the current and the preceding basis vectors. A zero result means
+that the Krylov vectors have become dependent.
+9
+The null vector can be built in the same pass. By Equation (48), the coefficientsξr of a null vectorσ = Pr ξrwr
+satisfy a three-term recurrence of their own, so each follows from the two before it. The circuit computes each coefficient
+while its basis vector is still stored and immediately addsξrwr into a 48-symbol register, thelocator register. When
+the walk ends, that register holdsσ.
+Breakdowns and scheduled repairs.Lanczos removes the component of a vectorv along a basis vectorw by
+subtracting ρw, with ρ = (wTv)/(wTw). Over F64, however, a nonzero vector can be orthogonal to itself, which
+leaves this quotient undefined. Block Lanczos repairs such a breakdown by treating the consecutive Krylov vectors
+w, Aw, . . . , Ad−1w as one block and removing the components along all of them at once. This is possible once their
+Gram matrix, the matrix of their inner products, is invertible:
+Gd =
+
+(Aiw)T(Ajw)d−1i,j=0 = gi+jd−1i,j=0, g k =w TAkw.(49)
+We calldthedepthof the block. The circuit supports depths two and three.
+A breakdown is rare, and the machinery that repairs it is expensive. An ordinary round of the walk costs 5,400
+Toffolis; a round that can also repair at depth two costs 12,000, and one that can repair at depth three costs 17,000. A
+fixed circuit that repaired each breakdown where it occurred would carry this machinery in every round. The circuit
+instead concentrates it in scheduledrepair rounds. It conditions the ordinary update ong0 = wTw̸ = 0. This test is
+cheap: in characteristic 2,wTw is the square of the sum of the components ofw, which needs only CNOTs. On an
+input with g0 = 0the update gates do not act, and the walk state stays frozen until the next repair round, which
+forms the block and advances the walk past it in one step. The walk has 52 rounds, four more than the dimension, so
+that delayed inputs can finish. Of these, 17 carry repair machinery. An input that needs a deeper block, or that has
+not finished after 52 rounds, fails.
+Ending and reversing the walk.For a given input, the walk ends wheng0 = g1 = g2 = 0, because no block of
+depth up to three is then invertible. The circuit freezes the walk there and records the round, as the divstep circuit
+does (SI II.1). After the last round, it tests which of three cases holds and routes the corresponding vector into the
+locator register. If w = 0, the Krylov vectors have become dependent, and the accumulated vector is the null vector.
+If w̸ = 0and Aw = 0, then w itself is a null vector. IfAw̸ = 0and A2w = 0, then Aw is a null vector. An input in
+none of these cases fails.
+After the phase scan described below, the circuit must undo the walk. It first measures the locator register in theX
+basis. The walk built that register by adding multiples of basis vectors, so the reverse walk can correct the phase left
+by the measurement as it retraces the rounds: each addition becomes a set of controlled-Z gates conditioned on the
+measurement outcomes, at no Toffoli cost. The reverse walk recomputes most of the decisions of the forward walk,
+such as its zero tests, while the vectors they depend on are present. One decision per round cannot be recomputed in
+time: whether the round advanced the walk, which controls an exchange of the two stored basis vectors. The forward
+walk stores that decision in one history qubit per round, 52 in all, and the reverse walk clears them. The reverse walk
+uses 52,000 fewer Toffolis than the forward walk.
+Error values.The locator gives the possible error points, and the phase also needs the error values. The circuit uses
+two facts, both counterparts of the Reed–Solomon decoder (Table S2). First, there is an evaluatorω whose coefficients
+are bilinear in the locator and the syndromes, asω = σS is for Reed–Solomon codes. Second, the error value at a
+simple zero of the locator is
+ej = ω(Pj)σ′(Pj) , σ ′ =∂ xσ+x 8∂yσ,(50)
+the counterpart of Forney’s formula(30). Here σ′ is the derivative of the locator along the curve. Differentiating
+Equation (41) in characteristic 2 givesdy = x8dx, so a stepdx along the curve changesσ by σ′ dx. The evaluator is
+ω = σ bS, where bS is the counterpart of the syndrome polynomialS(z): a series whose leading coefficients, in decreasing
+weighted degree, are the 123 syndromes [51].
+The locator comes from a 48-dimensional space and is not necessarily the minimal-degree locator. It can therefore
+also vanish at a point that carries no error, or have a repeated zero at an error point. At a point with no error,ω
+vanishes as well and the point contributes nothing. At a repeated zero the quotient becomes0/0. As in L’Hôpital’s
+rule, the error value then comes from the first few coefficients of the expansions ofω and σ at that point, which we call
+local coefficients. The circuit supports repeated zeros up to multiplicity three.
+Striped phase scan.For a curve point Pj, write cj for its six mask bits andej for its error value. As in the
+Reed–Solomon decoder, the mask bits defineµj ∈F 64 with ⟨cj, ej⟩2 = TrF64/F2 (µjej), and part of the phase is linear
+in the syndromes and costs onlyZ gates. The residual constanteµj vanishes at 128 points, which leaves 384 points to
+scan.
+10
+At each of these points the circuit needs three local coefficients ofω. Computing ω once and storing it would hold
+more than 100 field symbols through the whole scan. The circuit instead works in 24 stripes of 16 points. For each
+stripe it computes only the16× 3 = 48symbols that the stripe needs, uses them, and erases them by MBU at no
+Toffoli cost. The matching local coefficients of the locator are linear in its coefficient vector and cost only CNOTs.
+Recomputing for every stripe is affordable only becauseω is cheap to form. A direct construction multiplies the
+expansion of bS by σ coefficient by coefficient, which uses 2,452 field multiplications, or 37,000 Toffolis. The circuit uses
+evaluation–interpolation instead, as in Equation (46). One obstacle is that the syndromes givebS only as the leading
+coefficients of an expansion, which cannot be evaluated at a curve point. The circuit therefore replacesbS by a function
+that can be evaluated: a fractionhs = ns/q of two polynomials inx and y, with a fixed denominator and a numerator
+that is linear in the syndromess = (S0, . . . , S122)T. The fraction is chosen so that its product with any locator agrees
+with σ bS in every coefficient that the scan uses. All productsσhs lie in a fixed 206-dimensional space, so their values at
+206 suitably chosen curve points determine those coefficients, at206× 15 = 3,090Toffolis per stripe. The 24 stripes
+cost 74,000 Toffolis in total. This is more than the 37,000 Toffolis of one direct construction, but it avoids storingω.
+At each point, the circuit then forms the phase bitTr(eµj ω/σ ′)from the local coefficients. Division inF64 is cheap:
+the circuit computes the inverse with arithmetic in the smaller fieldF8, and the whole computation costs 33 Toffolis
+per point.
+On 100,000 random inputs, 30 produce the wrong sign. The circuit uses 930,000 Toffolis and 2,395 qubits, for a
+T Q-cost of2 .2 × 109. Relative to the Feng–Rao baseline, this reduces the Toffoli count by110×, the qubit count by
+81×, and theT Q-cost by9,100×.
+II. PRIME-FIELD MODULAR INVERSION
+We benchmark modular inversion within a complete arithmetic circuit: point addition on an elliptic curve over a
+256-bit prime field. Each point on this curve is a pair of integers(x, y)satisfying the curve equation
+y2 ≡x 3 + 7 (modp),(51)
+where p = 2256 − 232 − 977is a 256-bit prime number. The curve definespoint addition, an operation that combines two
+points P and Q into a third pointR = P + Q on the same curve (note that this addition is not the usual coordinate-wise
+addition). Geometrically, one draws the line throughP and Q, finds its third intersection with the curve, and reflects
+that point across the horizontal axis. Algebraically, for the inputs considered here, withQx ̸= Px, one first computes
+the slope
+λ≡(Q y −P y)(Qx −P x)−1 (modp),(52)
+where(Q x −P x)−1 denotes the inverse modulop. The coordinates of the sum are then
+Rx =λ 2 −P x −Q x, R y =λ(P x −R x)−P y.(53)
+We study the reversible point adder [52]: given an input point P and another, classically supplied pointQ, it
+performs
+|P⟩ 7− → |P+Q⟩.(54)
+The modular inverse required by Equation (52) is the dominant cost of point addition: once the slopeλ is known, the
+remaining coordinate updates require only a fixed sequence of relatively cheap modular additions and multiplications.
+In contrast, modular inversion follows a long input-dependent sequence of arithmetic transitions, which the circuit
+must later recover to reverse the computation and clear its ancillas.
+Prior point-addition constructions [8, 38] use the binary greatest common divisor (gcd) algorithm for modular
+inversion. The connection between gcd and inversion comes from expressing the gcd in terms of the original inputs.
+Because p is prime andw = Qx −P x ̸= 0, there are integersα and β such that gcd(p, w) = 1 = αp + βw. Reducing
+this identity modulop gives βw≡ 1, so β≡w −1 (modp ). The extended binary-gcd algorithm finds these coefficients
+by tracking expressions for the two current valuesu and v as integer combinations ofp and w. Binary gcd rests on two
+elementary identities. Ifu is even andv is odd, thengcd(u, v) = gcd(u/2, v); if u and v are both odd, then, foru > v,
+gcd(u, v) = gcd((u−v)/2, v). Applying these identities symmetrically gives the reduction
+(u, v)7− →
+
+
+
+(u/2, v)forueven,
+(u, v/2)forveven,
+((u−v)/2, v)foru > v, u, vodd,
+(u,(v−u)/2)forv > u, u, vodd.
+(55)
+11
+Each case preserves the gcd and makes one value smaller.
+Making this reduction reversible is difficult because its control flow is input-dependent: which line of Equation (55)
+applies changes from one step to the next, and the reduced pair does not in general reveal which line produced it. A
+quantum circuit therefore cannot simply run the reduction backward to restore its input and clear its workspace; it
+must preserve enough information to identify each step. The prior constructions do so using thedialogintroduced by
+Khattaret al. [13]. The direct approach would update the coefficients that becomeα and β alongside the two values
+throughout the reduction. The dialog avoids holding these growing coefficients in memory. Its first pass updates only
+the pair being reduced and records a compact symbol identifying each subtraction, swap, and halving choice. A second
+pass replays the same transformations to construct the required coefficient. Initializing this replay from the numerator
+a = Qy −P y produces aβ = aw−1 modp directly, without ever storingw−1 in a separate register. The simple binary
+updates and the replay trick reduce the gate count, but the complete dialog record requires hundreds of additional
+qubits. Table S3 compares these constructions with the two circuits reported below.
+TABLE S3Resource comparison for point addition. All circuits use the same affine-coordinate input and output;
+counts include reversible cleanup but exclude application-specific storage or lookup used to supply the classical addend.
+Construction Inversion strategy Toffolis QubitsT Q
+Schrottenloher [38] Binary gcd and dialog trick [13]1.9·10 6 1,4462.7·10 9
+Divstep circuit,SI II.1Divsteps with decoding4.0·10 6 9353.7·10 9
+Luoet al.[40] Packed Euclidean walk7.0·10 7 8385.8·10 10
+Specialized Euclidean,SI II.2Specialized packed walk2.1·10 7 8431.7·10 10
+II.1. Divsteps
+Rather than reorganize the binary-gcd constructions above, the search finds a new reversible prime-field inversion
+architecture built ondivsteps[ 15, 53]. In the divstep recurrence of Equation (6), a small signed counterz, called the
+half delta, replaces the repeated magnitude comparisons in Equation (55): the sign ofz and the parity of one value
+alone determine the next update. We call the choice of update at a step itsdecision. Appendix A proves that every
+decision can be computed exactly from the registers as they stand after the step. When a decision is cheap to decode,
+the circuit decodes it from the updated state. Otherwise, the circuit stores the decision as a single bit on a fixed-size
+history stack. We call the sequence of divsteps for one input awalk. The point adder uses this inversion twice, once to
+form the slopeλ and once to erase it after the coordinate update. Each use runs a forward walk and a reverse walk,
+for four walks in total.
+Unlike the quotient-based extended Euclidean algorithm (EEA) of SI II.2, which divides one remainder by the other
+at every iteration, a divstep never computes a multi-bit quotient or adds a multiple of one full register to another. A
+divstep walk needs more steps than the quotient-based EEA needs divisions, but each step is much cheaper. Reversible
+divsteps were previously developed over binary fields and polynomial rings [13, 54]. There, each step shrinks the
+polynomial pair by one coefficient, and the freed space can hold that step’s record. Integer divsteps free no such fixed
+space, so a stored history costs additional qubits. To our knowledge, this is the first reversible divstep inversion circuit
+over a prime field.
+We recall the notation of the main text. The walk state is(z, f, g, fv, gv), and each step applies one of the three
+updates in Equation (6). Two bits label the update:s records whether the step swaps the roles off and g, and b
+records whether the incomingg is odd. To run a step backward, the circuit must knows and b, and the updated
+state does not hold them explicitly. Cheap tests on a few bits of the updated state recovers at every step andb at
+about two thirds of the steps. We call the remaining decisionsambiguous. Each ambiguous decision has adepthj, the
+number of trailing zero bits of the updated coefficientf ′v, and we writef ′v = 2jq with q odd. A swap followed by a run
+of ambiguous decisions is anexcursion, and the depth counts the steps of the excursion so far, with the swap as step 1.
+The cost of a depth-j decoder grows withj. The cutoff jstore is the depth from which the circuit stops decoding: it
+decodes an ambiguous decision at depthj < jstore and stores one at depthj≥j store.
+The cutoff jstore trades qubits for Toffolis: a higher cutoff decodes more and stores less. Atjstore = 0, the circuit
+uses only the cheap tests and stores every remaining decision, requiring 198 history qubits for the 533-step schedule
+and 1,065 qubits in total. The discovered circuit chooses the intermediate cutoffjstore = 5: it decodes depths two
+through four with the rules given below. Storing only the deeper decisions shrinks the history stack from 198 to 60
+qubits. At the low-qubit extreme,jstore = 9decodes through j = 8and reserves 24 history qubits. Varying the cutoff
+and the workspace produces a family of circuits that spans from 3.6 million Toffolis and 1,031 qubits to 7.9 million
+Toffolis and 893 qubits; an additional higher-qubit configuration uses 3.3 million Toffolis and 1,191 qubits.
+12
+Branch decoders.A forward step computes b from the parity ofg and uses it to control the update. After the
+update, g no longer holds that parity, so the step is left withb in a qubit of its own. Uncomputingb there would
+require the decoder on the forward walk as well. The forward step instead disposes ofb in one of two ways. If the
+decision is ambiguous at depthj≥j store, the step pushesb onto the history stack. Otherwise, the step removesb by
+MBU: it measuresb in the X basis. The measurement frees the qubit but leaves a phase that depends onb and on the
+measurement outcome.
+The reverse walk is the uncomputation of the forward walk. Once the circuit has used the inverse, it undoes the
+forward steps in the opposite order, which restoresw and returns the walk registers to zero. The matching reverse step
+obtains b again, either by popping the stack or by applying the tests and decoders to the updated state. It applies the
+phase correction for the measurement outcome and usesb to choose which update to undo. The restoredg then holds
+b as its parity, so a CNOT from the low bit ofg clears it. Decoders therefore appear only in reverse steps. A walk that
+stores more decisions than the stack holds overflows it and fails.
+The decoders evaluate the second form of Equation (A11),b = bitj−1(p(f ′q)−1 mod 2j). Both f ′ and q are odd,
+so the depth-j decoder is a Boolean function of2(j− 1)bits. Write fi = f ′[i]and qi = q[i] = f ′v[j + i]for1 ≤i < j,
+whereu[i]is bitiofu. For the primepof Equation (51), the decoders at depths two through five are
+j= 2 :b= 1⊕f 1 ⊕q 1,(56a)
+j= 3 :b= 1⊕f 2 ⊕q 2,(56b)
+j= 4 :b= 1⊕f 1 ⊕f 2 ⊕f 3 ⊕q 1 ⊕q 2 ⊕q 3 ⊕(f 1 ⊕f 2)(q1 ⊕q 2),(56c)
+j= 5 :b=f 3 ⊕f 4 ⊕q 3 ⊕q 4 ⊕M f ⊕M q ⊕f 1q1 ⊕f 2q3 ⊕f 3q2 ⊕f 3q3
+⊕M f (q1 ⊕q 2)⊕(f 1 ⊕f 2)Mq,(56d)
+where Mf = f1f2 ⊕f 1f3 ⊕f 2f3 is the majority off1, f2, f3 and Mq is the majority ofq1, q2, q3. Written out as sums
+of products, these four rules have 3, 3, 11, and 26 terms. The decoders at depths six, seven, and eight have 79, 268,
+and 1,092 terms. The growth reflects Equation (A13): the deciding bit sits above the bit of every earlier decision in
+the excursion, and the multiplication byq−1 carries through all of them.
+The circuit implements equivalent forms of these rules. The determinant identity of Equation (A3) fixesg′v mod 2j
+once f ′ is known, so a decoder may read a bit ofg′v in place of bits off ′. The depth-two decoder is Equation (A14),
+which costs two Toffolis. At depths three and four, the rule is an XOR of bits ofq, with no products, oncef ′ mod 16
+is fixed. From depth five on, the rule contains products of bits ofq.
+These rules explain where the cutoff sits. Every reverse step must contain the decoder for every depth belowjstore,
+whether or not that step needs it. Each decoder is conditioned on a flag marking the depth, so each term that reads a
+register bit costs at least one Toffoli. The benefit shrinks as the cost grows: among ambiguous decisions in sampled
+walks,50 .1%occur at depth two,25 .0%at depth three,12 .5%at depth four, and12 .4%at all greater depths. Beyond
+depth four, each further depth roughly triples the number of terms and removes half as much history as the depth
+before it.
+Early stopping.A walk terminates when g reaches zero: at that pointf = ±1and the inverse can be read fromfv.
+Different inputs terminate at different steps, typically between steps 505 and 530 (Figure 3(b)), but the circuit runs a
+fixed schedule of 533 steps. The steps after termination must leave the state unchanged. Left alone, the recurrence
+would treat g = 0as an even value, so it would keep doublingfv and incrementing z until both outgrow their registers.
+The circuit therefore freezes a terminated walk. Each forward step tests whetherg = 0. On the first step where the
+test succeeds, the circuit sets a one-qubit frozen flag, and from then on the flag disables every update. The reverse
+walk must clear the flag at that same step. A frozen state looks identical at every later step, so the state alone cannot
+reveal when the walk froze. The circuit writes the step index into a small register when it sets the flag. Each reverse
+step compares the register with its own index, and a match clears both the flag and the register.
+This machinery costs Toffolis at every step: a test that every bit ofg is zero, and one more control on every update.
+The test is most expensive in the early steps, whereg is widest and termination is least likely. The first 498 steps omit
+the test, the flag, and the flag’s controls. A walk that terminates within those steps fails. The measured probability is
+1.4×10 −6 per inversion, and Table S4 uses3×10−6 as an upper bound.
+A walk whose counterz outgrows its register also fails, with probability9× 10−8 per inversion; the two events give
+the early-stopping row of Table S4.
+Removing the power-of-two scale.At termination, f fv equals the desired inverse times2t, where t counts the
+active steps, those before the walk freezes (Proposition A.2):
+f fv ≡2 tw−1 (modp).(57)
+The stopping timet depends on the input, so different branches of a superposition carry different scales. Classical
+implementations avoid this by running a fixed number of steps, which makes the scale a known constant; the circuit
+13
+instead freezes wheng = 0. A direct approach would countt in a register, apply a multiplication by2−t controlled on
+that register, and then uncompute the count.
+The circuit avoids this count. It setsr = af fv ≡ 2taw−1 (modp ), where a is the field value to be multiplied by the
+inverse. For the slope of Equation (52),w = Qx −P x is the denominator anda = Qy −P y is the numerator. The
+reverse walk then undoes exactlyt active steps, and the frozen flag marks which steps are active. The circuit attaches
+one modular halving ofr to each active reverse step:r7→r/ 2if r is even andr7→ (r + p)/2otherwise. After the
+reverse walk,r=aw −1, the inputwis restored, and no record oftremains.
+Step-dependent qubit reuse.A naïve layout would give each of the four signed integers f, g, fv, gv its own
+permanent 256-bit register, consuming 1,024 qubits before the counter, controls, or history stack are included. These
+registers do not all need their full capacity simultaneously: as the walk progresses,f and g need progressively fewer
+bits, while fv and gv need more. Each step halvesg, and swaps alternate which value plays the role ofg. Each step
+also doubles a coefficient. The packed Euclidean construction of Luoet al.[40] and its specialization in SI II.2 use
+the same fact: a shrinking remainder and growing coefficient occupy opposite ends of one register, as visualized in
+Figure S2(a). The discovered divstep circuit applies this idea tof, g, fv, gv using two 256-qubit registers rather than
+four: g and fv share the register that initially holdsw, and f and gv share the other. Within each register, the growing
+coefficient claims positions vacated by its shrinking partner. The width and position of every value at every step are
+fixed when the circuit is built. A walk in which a value outgrows its assigned width fails; this event is the integer-size
+limit in Table S4.
+Fused coordinate arithmetic.For the remaining coordinate arithmetic, the circuit does not call general multipli-
+cation, squaring, or reduction circuits. It adds each term of the coordinate formulas straight into the register that
+needs it. For the square, the coordinate update needsλ2 only while formingRx. Splittingλ=λ 0 + 2128λ1 gives
+λ2 =λ 20 + 2129λ0λ1 + 2256λ21 (modp).(58)
+This expresses the 256-bit square as three products involving only 128-bit halves. The circuit adds them one at a time
+directly into the coordinate register and clears each temporary product before computing the next. It therefore avoids
+both a register for the completed square and the second full multiplication of the usual approach, which computes the
+square, copies it, and uncomputes it.
+The remaining coordinate products exploit the special form of the primep. Since
+2256 ≡2 32 + 977 (modp),(59)
+the circuit can replace any bits above bit 255 with a small correction to the low bits instead of performing a general
+modular reduction. The circuit applies this correction while it forms each product, so it never holds a complete product
+that it must later clear.
+We require the exact map in Equation (54), including its phase and the return of every ancilla to zero, except on at
+most a2 × 10−4 fraction of inputs [55]. The 16-bit-window algorithm of Babbushet al.[8] invokes the point adder 28
+times; by a union bound, the failure budget adds less than0.6%retry overhead.
+The four divstep walks use 2.5 million Toffolis,63%of the circuit. The field multiplications around the walks use
+1.4 million,35%of the circuit. The fused square and the coordinate additions use the remaining 0.10 million. The
+935-qubit peak occurs during a walk. The algebraic identities behind the recurrence, branch decoders, fused square,
+and sparse-prime reductions are exact. Failures arise only from the finite stopping-time, integer-size, history, carry,
+and comparison limits.
+Reducing modulo the sparse prime adds a short constant,232 + 977or a small multiple of it, to the low end of a
+256-bit register. In principle the carry from this addition can travel up the whole register. In practice it rarely travels
+far, because it keeps moving only while the bits above it are ones. The circuit therefore propagates each such carry
+through only the low 58 bits (60 in the fused square) and drops any carry that would go further. This happens with
+probability about2 −26 per reduction. The comparison limit uses the same idea: to decide whether a modular addition
+overflowed, the circuit compares only the top 27 bits of the two operands, which gives the wrong answer only when
+those bits all agree. Table S4 collects all contributions [56]; each entry is the per-use failure rate times the number of
+uses in one point addition. Among 100,000 tests of the full circuit, four fail.
+II.2. Specialized Euclidean construction
+This subsection reports a second discovered circuit, at the low-qubit end of the Toffoli–qubit frontier (Table S3):
+843 qubits against 935 for the divstep circuit, at about five times the Toffoli count. Here the search does not find a
+new inversion algorithm. It starts from the space-efficient Euclidean point adder of Luoet al.[40], which we rebuilt
+14
+TABLE S4Contributions to the union bound on the point-addition failure probability. Each entry is per point
+addition, which contains two inversions. Probabilities for the walk limits are estimated from 200 million independent
+random 256-bit walks.
+Failure source Probability (upper bound)
+Multiplier carry and comparison limits7.07×10 −5
+Stopping-time and integer-size limits7.56×10 −5
+Early-stopping andz-register limits6.18×10 −6
+Branch-history storage6.8×10 −6
+Fused-square carry limit6×10 −7
+Union bound1.599×10 −4
+as a complete circuit, and specializes its schedule for the primep. The schedule is the fixed list of steps, and of bit
+positions within each step, that the circuit runs. Our reconstruction, the baseline below, uses 69.5 million Toffolis and
+838 qubits. The discovered specialization uses 843 qubits while reducing the Toffoli count to 20.5 million, a factor of
+3.4. We use the same inputs and outputs, input distribution, and failure budget as above.
+To invertwmodulop, the EEA starts fromr −1 =pandr 0 =wand computes
+ai =
+ ri−1
+ri
+
+, r i+1 =r i−1 −a iri.(60)
+Alongside the remainders, it maintains coefficientst−1 = 0, t0 = 1, with ti+1 = ti−1 + aiti. When a remainder reaches
+one, the corresponding coefficient gives the modular inverse up to sign.
+Each iteration of Equation (60) is an integer division. The quotientai of the two current remainders drives both
+updates: the remainder update subtractsai copies of one remainder from the other, and the coefficient update addsai
+copies of one coefficient to the other. The quotients depend on the input and vary in size, so the circuit must compute
+each one coherently before it can apply it. It performs each division by binary long division. We call one elementary
+move of this division astep; a division whose quotient hasℓ bits takes4 ℓ steps. The total over an inversion depends
+on the input and is at most 1,616 for the primep, so the baseline schedules 1,616 steps.
+The baseline circuit exploits the fact that the remaindersri shrink as the coefficientsti grow. It stores a remainder
+and a coefficient from opposite ends of the same register, and stores the succeeding pair in a second such register. We
+call values that share a register in this waypacked. Four short counters record where the four values begin and end.
+The circuit processes these packed values by scanning across their possible bit positions. At each position, it uses the
+counters to decide whether that bit belongs to the value currently being processed; we call this check acounter test. If
+it does, the circuit performs the required one-bit arithmetic; otherwise it does nothing. The fixed circuit must include
+this test and arithmetic for every position that any input could require, even though a particular input uses only a
+much smaller range of positions.
+Each step runs several scans, one each for the remainder update, the coefficient update, and the rearrangement of
+the packed values. The path that the boundary between a remainder and a coefficient traces during an inversion is the
+input’sEuclidean walk.
+Each use of the inversion performs an in-place division or multiplication. For the slope, a forward pass replacesw by
+its inverse, one multiplication forms the quotient in an accumulator, anX-basis measurement erases the old numerator,
+and the reverse pass restoresw. The second inversion runs the same sequence in the opposite order to erase the slope.
+Every step consists of in-place reversible operations on the packed registers and counters, so the reverse pass is the
+inverse circuit and needs no stored history. By contrast, the divstep circuit must recover a decision at every step.
+The discovered circuit keeps the baseline’s packed register layout and reduces the cost of its schedule mainly in
+three ways. First, it omits scan positions that inputs rarely use. Second, it removes selected counter tests. Third,
+it recompiles the scans of a step together so that they share intermediate results. The first two changes fail on rare
+inputs, which count against the2×10 −4 failure budget per point addition. The third is exact.
+Fitted windows and the schedule cut.The baseline circuit includes arithmetic at every bit position required by
+its worst-case bounds. Most inputs occupy a much narrower range at each step. The specialized schedule therefore
+replaces each worst-case range with afitted window: a range chosen separately for each step and fitted to the positions
+that sampled walks use. The same fit shortens the schedule from the worst-case 1,616 steps to 1,432 steps; we call this
+shortening theschedule cut. Figure S2(b) shows how closely sampled walks concentrate within the windows, compared
+with the worst-case bounds.
+Test-free positions.A fitted window still leaves a counter test at every position inside it, and a counter test is
+expensive. In the baseline, a position whose arithmetic is conditioned on a counter costs about ten Toffolis, several
+15
+t rUnused
+t′ r′Unused
+Grows ShrinksRegister 1
+Register 2
+1 259
+(a) Two shared 259-qubit registers
+1
+64
+128
+192
+259Bit position
+(b) Euclidean-walk coverage
+Skipped
+t
+r
+Sampled walks
+Fitted windows
+W orst-case bounds
+T est-free positions
+0 200 400 600 800 1000 1200 1400 1600
+Step
+0
+10
+20Toﬀolis per step
+×103 (c) Per-step executed Toﬀoli
+Baseline schedule (1,616 steps)
+T ested positions
+T est-free positions
+Fixed overhead 0
+20
+40
+60Toﬀolis (millions)
+Merged scans −12M
+Measured carries −6.5M
+Fitted windows−10M
+T est-free positions−9.0M
+Schedule cut−3.7M
+Sparse-prime multipliers −4.6M
+T runcated multipliers−2.5M
+Discovered
+21M
+Baseline
+70M
+(d) Mechanism ablation
+Exact rewrite
+Uses failure budget
+FIG. S2Specializing the Euclidean schedule and its contribution to the Toffoli reduction. (a) Two 259-qubit registers
+store coefficients t, t′ from their low ends and remaindersr, r′ from their high ends. Four counters mark the boundaries
+of these values as the coefficients grow and the remainders shrink. (b) Each thin curve traces the moving boundary
+between the shrinking remainderr and growing coefficientt for one sampled walk. Light shading shows the fitted
+windows retained by the discovered circuit, dashed curves show the exact worst-case bounds, and dark shading marks
+the test-free positions, processed without first testing the counters. The hatched region is removed by the schedule cut
+from 1,616 to 1,432 steps. (c) Executed Toffolis per step. The gray profile is the baseline schedule; the discovered
+circuit’s profile splits into the fixed overhead of a step, arithmetic at test-free positions, and arithmetic at tested
+positions. (d) Cumulative ablation from 70 million to 21 million Toffolis. Blue changes are exact, whereas brown
+changes count against the failure budget.
+times the cost of the arithmetic alone. Where every sampled input uses a position at a given step, the schedule
+marks the positiontest-free, and the circuit performs its arithmetic unconditionally. Counter tests remain at the other
+positions inside the window, near the moving boundaries of the values. On an input that does not use a test-free
+position, the unconditional arithmetic produces a wrong result. The two approximations remove different costs. A
+fitted window deletes both the test and the arithmetic at the positions outside it. A test-free position keeps the
+arithmetic and deletes the test. Figure S2(c) shows the resulting per-step cost.
+Merged scans and measured carries.The baseline circuit compiles the scans within a step separately, so
+neighboring scans repeat some of the same comparisons and compute some of the same control bits. Compiling the
+complete step as one operation removes this repetition; we call this changemerged scans. The clearest instance is the
+remainder update. The comparison that decides whether a subtraction applies and the subtraction itself run over the
+same two remainders, and the baseline compiles them as two passes. The discovered circuit merges them into one
+compare-and-subtract scan whose intermediate bits serve both operations. It then erases those bits by measurement,
+which needs no Toffolis, instead of uncomputing them. The baseline also shifts a register’s contents, by an amount
+that depends on the input, as the values change size. The discovered circuit renumbers the positions instead of moving
+the qubits, which costs no gates. In the additions that remain, a carry that only one position needs is likewise erased
+by measurement (measured carries). These changes are exact.
+Multiplier arithmetic.The coordinate update also requires modular squaring and multiplication. The discovered
+circuit specializes these operations to the sparse primep. The exact part of the rewrite, thesparse-prime multipliers,
+uses the fold of Equation (59), as in SI II.1. The approximate part, thetruncated multipliers, limits how far a carry
+16
+propagates and how many bits a comparison inspects.
+Figure S2(d) shows the cumulative Toffoli reduction. The two inversions, including their forward and reverse passes,
+together account for98%of the Toffolis.
+We estimate the failure probability empirically. Across 10 million sampled walks, 72 use a position outside a fitted
+window and 258 do not use a test-free position, a combined rate of about6.6 × 10−5 per point addition. The schedule
+cut adds1 .3 × 10−5, and the truncated multipliers add at most2× 10−6. The total is about8 × 10−5 per point
+addition. Among 100,000 tests of the full circuit, four fail.
+III. NUMERICAL FUNCTION EVALUATION
+Elementary-function evaluation has been a central problem in numerical computing since the earliest mathematical
+software libraries. The routines conventionally collected inlibm, the mathematical-function library supplied by C and
+Unix systems, evaluate roots, exponentials, logarithms, and trigonometric functions by combining range reduction, table
+lookup, polynomial approximation, and iterative refinement [57]. These functions also appear throughout quantum
+algorithms. They determine controlled rotation angles in quantum linear-systems algorithms [12, 58], set interaction
+phases in real-space Hamiltonian simulation [59, 60], and enter the amplitudes prepared for Hamiltonian simulation [4].
+These classical techniques cannot simply be ported into coherent quantum circuits. Data-dependent choices must be
+compiled into a fixed gate sequence, and all temporary state must ultimately be returned to|0⟩. The latter reversibility
+constraint is particularly costly for numerical routines because many classical methods proceed through a long sequence
+of large, high-precision intermediate values. An ordinary implementation can overwrite each value and reuse the same
+storage as soon as the next value is formed. A reversible implementation must instead retain enough information to
+reconstruct the overwritten value, or recompute it when clearing the circuit. Consequently, composing individually
+efficient routines can accumulate many large live registers and may require running the complete computation backward
+after its result has been consumed. Iterative Newton-style methods repeatedly replace one full-precision estimate with
+another, so their reversible implementations carry large intermediate registers through every step [61]. Floating-point
+representations add exponent bits to every such register to track a wide range of magnitudes [62]. The approximation,
+fixed-point representation, and uncomputation schedule therefore become inseparable parts of circuit design [12].
+We consider three numerical subroutines: Harrow–Hassidim–Lloyd (HHL) rotation-angle evaluation (arcsin),
+Coulomb-potential evaluation (1/
+p
+∥x∥2), and Gaussian evaluation (e−x2) [2, 58, 59]. Each implements an ad-
+ditive fixed-point map|x⟩ |k⟩ 7→ |x⟩ |k+ef(x)⟩, with a uniform error bound over its promised domain [63]. The additive
+form serves both common uses of the result. An ordinary accumulatork holds the value for later bitwise-controlled
+operations, while a phase-gradient accumulator converts the addition directly into a phase.
+Our baselines use the piecewise-polynomial construction of Häner, Roetteler, and Svore (HRS) [12]. HRS partitions
+the domain, fits a low-degree polynomial on each interval, and coherently loads the selected polynomial’s coefficients.
+It evaluates the polynomial in general fixed-point arithmetic by Horner’s rule, which uses one multiplication per degree.
+It adds the result to the output and reverses the computation to clear its temporary registers. Its cost has four sources:
+locating an interval with arbitrary boundaries; the wide multiplications of the Horner polynomial-evaluation stage;
+the registers that hold intermediate products and the polynomial value; and the reverse pass that erases the loaded
+coefficients. For each task we tune the polynomial degree, fixed-point format, and published recomputation trade-offs,
+and widen each interval until it reaches the error bound. We then use the complete gate-level implementation with the
+lowestT Q-cost.
+The three discovered circuits still implement piecewise-polynomial approximations. They keep the HRS approximation
+family but reorganize it for reversible execution, addressing the four costs in turn. They choose finer partitions whose
+intervals can be identified from the input bits. No comparison is then needed, and a polynomial of lower degree on
+fewer input bits suffices: the HHL and Gaussian circuits replace cubics by quadratics, and the Coulomb circuit replaces
+quadratics by lines. Where the intervals differ in width, as in the HHL circuit, a rearrangement of the input bits maps
+them into one shared local coordinate, so that one arithmetic kernel serves every interval. This is the conditional
+routing of the main text: a cheap, interval-dependent rearrangement of the data surrounds one shared kernel. The
+arithmetic accumulates directly into its destination, avoiding registers for full products and for the function value.
+MBU (Methods) then clears the loaded coefficients without reversing the lookup.
+One supporting technique makes these choices safe. An offline search fits the coefficients to the exact quantized and
+truncated integer computation that the circuit performs, rather than rounding an ideal real-valued approximation
+afterward. Coefficient widths, omitted product columns, shifts, truncation, and rounding therefore share one end-to-end
+error budget.
+All three circuits use these techniques. They differ in how the input reaches the arithmetic. The HHL circuit, which
+we describe in full, uses intervals of unequal width and cyclically shifts the input bits into a shared coordinate. The
+17
+Coulomb circuit first builds the squared distance and normalizes it. The Gaussian circuit folds its input onto the
+nonnegative axis, prunes its lookup, and reuses coefficient qubits.
+III.1. HHL rotation angle
+After phase estimation, HHL applies an eigenvalue-dependent rotation whose angle isθ = arcsin(C/eλ); conditioning
+on the rotated ancilla reweights each eigencomponent by1/eλ [58]. We take C = 1/2and represent the eigenvalue
+estimate by a 21-bit integerX, withx=X/2 16 ∈[1,32). The circuit adds the 33-bit angle
+f(X) =round
+
+232 arcsin
+ 215
+X
+
+(61)
+to an accumulatork. We require error below10−7 radians throughout the domain.
+The tuned HRS baseline uses cubic fits on 35 intervals and general 44-bit fixed-point arithmetic. It meets the error
+bound with 16,000 Toffolis and 300 qubits. Locating the interval requires coherent comparisons against arbitrary
+boundaries, and each evaluation performs three multiplications on 44-bit numbers.
+The discovered circuit restructures this dataflow with three transformations, illustrated in Figure S3.
+Power-of-two-aligned intervals.The function arcsin(1/(2x))changes rapidly near x = 1and progressively more
+slowly as x increases. An arbitrary adaptive partition could follow this variation, but reversibly locating one of its
+intervals would require comparisons against general boundaries. The discovered circuit instead uses narrow intervals
+near x = 1and wider ones where the function is flatter, while restricting every interval to the power-of-two-aligned, or
+dyadic, form[ L, L+ 2b)with L a multiple of2b. We call such an interval aleaf, because these intervals are the leaves
+of a binary tree over the input bits. The leading bits of the input then determine the leaf.
+Because selection is cheap, a much finer partition is affordable: the circuit uses 345 intervals of widths28 through
+215, whereas the baseline uses 35 arbitrary intervals. The finer partition simplifies the arithmetic in two ways. A
+quadratic suffices instead of the baseline cubic, reducing the number of multiplications, and each polynomial depends
+only on the narrow local displacementδ = X−L , reducing its operand widths. A uniform partition at the finest width
+would require 7,936 intervals (Figure S3(b)), so the dyadic tree obtains these benefits without paying for uniformly
+fine resolution.
+Shared local coordinate.After selecting a leaf, a conventional polynomial-evaluation stage would formδ = X−L
+and rescale it according to the leaf width, requiring arithmetic and temporary storage. Moreover, leaves of different
+widths initially present differently scaled inputs to the polynomial-evaluation stage. The circuit replaces this coordinate
+arithmetic with an in-place cyclic shift of the input bits. ForX = L + δ in a width-2b leaf, cyclically shifting the low
+15 bits produces
+d= 2 15−bδ+c L.(62)
+The varying bitsδ move to a common scale, while the fixed leaf bits wrap around to formcL. Because cL is constant
+within the leaf, the offline fit absorbs it into the coefficients. Thus every leaf feeds the same 15-bit polynomial-evaluation
+stage without subtraction, arithmetic rescaling, or a coordinate register (Figure S3(b)). For example, in a width-212
+leaf, the low 15 bits consist of three bits fixed by the leaf followed by the 12 varying bits ofδ. Shifting those bits
+cyclically left by three places producesd= 23δ+c L.
+Narrow direct accumulation.For each leaf, the coefficient table defines the integer quadratic
+qL(d) =g 0 −d(g 1 −g 2d),(63)
+with intercept g0, slope g1, and curvatureg2. A general Horner polynomial-evaluation stage multiplies large fixed-point
+numbers, retains work registers for those products, and materializes the polynomial value before adding it to the
+output. The shared polynomial-evaluation stage instead consumes the selected coefficients in place. It first overwrites
+the loaded slopeg1 with the inner Horner value, then accumulates the outer product directly intok:
+t←g 1 −g 2d(stored overg 1), k←k+g 0 −dt.(64)
+No separate register ever holds the completed polynomial or either full product.
+The products themselves are also truncated: the circuit omits the low-order partial-product columns whose combined
+effect stays inside the error budget. The offline search fits the integer coefficientsgi to the exact updates in Equation (64),
+including the truncated columns.
+The worst-case error over all inputs is9.95 × 10−8 radians. The circuit uses 1,348 Toffolis and 115 qubits, for a
+T Q-cost of 160,000. Relative to the tuned HRS baseline, this reduces the Toffoli count by12×, the qubit count by
+2.6×, and theT Q-cost by32×.
+18
+(a) Circuit structure
+|X⟩
+Fixup
+cL
+Evaluate
+δ
+|0⟩ QROM
+X
+|k⟩
+d
+{gi}
+k k+f(X)
+(b) Leaf selection and the shared coordinate (c) Multiplication footprint
+...
+...
+δ(15)
+cL δ(12)
+cL δ(9)
+δ
+δ cL
+δ cL
+Shared
+arithmetic
+HRS Horner step
+44×44bits
+Ours
+15×16bits
+FIG. S3Co-designed HHL rotation-angle circuit. (a) Complete reversible dataflow: a dyadic lookup selects a local
+quadratic and a cyclic shift, the input is mapped into a shared local coordinate, and the quadratic is accumulated
+directly intok. The inverse shift restoresX; measurement and a shared phase correction clear the consumed coefficients
+without reversing the lookup. (b) Dyadic leaves and the shared coordinate. Power-of-two-aligned leaves are selected by
+the leading input bits. Shifting each leaf’s varying bitsδ to a common scale allows leaves of different widths to feed
+one 15-bit polynomial-evaluation stage without subtraction or arithmetic rescaling. (c) Arithmetic consequence: the
+circuit multiplies the 15-bit coordinate by a 16-bit slope, compared with44× 44bits for each multiplication in the
+general HRS Horner polynomial-evaluation stage.
+III.2. Coulomb potential
+Real-space simulation repeatedly applies phases proportional to the inverse distance between particle pairs [59, 60].
+For distinct pointsri, rj ∈ {0, . . . ,255}3, our circuit adds
+F(r i, rj) =round
+
+ 224qP
+c∈{x,y,z} (ri,c −r j,c)2
+
+ (65)
+to a 25-bit accumulatork. We require error below2× 10−6 in the inverse distance. The tuned HRS baseline normalizes
+the squared distance and evaluates quadratics over 16 intervals, using 6,355 Toffolis and 252 qubits. The discovered
+circuit instead builds the squared distance in a single accumulation, replaces the quadratics by a finer table of lines,
+and erases that larger lookup cheaply.
+Direct squared-distance accumulation.The inverse-square-root approximation begins from the exact squared
+distance d2 = Pc(ri,c −r j,c)2. A conventional implementation would form the three coordinate squares in separate
+product registers and then add them. The discovered circuit instead adds the partial products of all three squares
+directly into one accumulator. This yieldsd2 exactly, without three product registers or a separate summation stage.
+A finer table of lines.The central approximation trade-off is to spend more lookup entries in order to use a
+lower-degree polynomial. HRS uses 16 intervals and evaluates a quadratic in each. The discovered circuit uses 128
+19
+intervals and evaluates only a line in each: the larger lookup is cheaper than the additional reversible multiplication
+required by a quadratic.
+Both constructions first writed2 = 2eu, with mantissa1≤u <2, so that
+1√
+d2 = 2−e/2 1√u .(66)
+A few flag qubits record the scale2−e/2. The parity ofe and the six leading bits of the mantissa select one of 128
+lines, and the next six bits give a local coordinate. The remaining low bits are irrelevant within the error bound. The
+selected line therefore needs at most six controlled additions rather than a general multiplication, after which the
+circuit restores the scale and adds the result tok. As in the HHL circuit, the coefficients are fitted to the exact integer
+computation.
+The larger table is affordable because MBU of a lookup [64] removes it with 17 Toffolis, instead of the 126 that
+reversing it would take.
+The worst-case error over all attainable squared distances is1.91 × 10−6 in the inverse distance. The circuit uses
+1,140 Toffolis and 142 qubits, for aT Q-cost of 160,000. Relative to the tuned HRS baseline, this reduces the Toffoli
+count by5.6×, the qubit count by1.8×, and theT Q-cost by9.9×.
+III.3. Fixed-point Gaussian
+The Gaussian e−x2 enters chemistry simulation through on-the-fly evaluation of molecular basis functions [2] and
+Gaussian state preparation [65]. The input is a 39-bit two’s-complement integerXs representing x = Xs/232, and the
+promised domain isx∈[−8,8). The circuit adds
+f(X s) =round
+ 
+232e−x2  (67)
+to a 39-bit accumulator with error below10−7. The tuned HRS baseline first formsx2 and evaluates cubics over 32
+intervals using general 40-bit arithmetic, for 24,000 Toffolis and 362 qubits.
+The discovered circuit never formsx2. It folds the input onto the nonnegative axis and approximatese−y2 directly.
+For a negative two’s-complement input, forming|x| would complement the data bits and add one. The circuit omits
+that addition, so the complement, which needs only Clifford gates, instead representsy = |x| −2−32. This removes an
+entire carry chain, and the resulting one-unit offset lies within the error budget.
+Pruned coefficient lookup.Ten bits of y directly select one of 1,024 equal intervals of width2−7 that cover[0 , 8),
+while the lower bits give the local coordinate. The Gaussian’s decay divides these intervals into three regimes: 455
+require quadratics, the next 59 need only constants, and the remaining 510 return zero. A conventional QROM would
+nevertheless spend gates on every interval. The variable-spaced QROM of Sanderset al.[66] instead stops whenever an
+entire subtree shares one value. Pruning the constant and zero intervals reduces the lookup from 1,022 Toffolis to 495.
+Direct quadratic accumulation.On a quadratic interval, the lookup returns an intercept, slope, and curvature.
+A truncated product updates the slope register in place, after which the circuit adds the intercept and accumulates
+the final product directly intok. Consequently, it never formsy2 or a completed product, and it needs no separate
+Gaussian-value register. The coefficients are again fitted to the exact integer computation.
+After MBU, the freed coefficient qubits serve as carry ancillas for the later arithmetic [64]. Together with direct
+accumulation, this reuse lowers the peak qubit count from 362 in the baseline to 139.
+The worst-case error over the full domain is9.99 × 10−8. The circuit uses 1,583 Toffolis and 139 qubits, for aT Q-cost
+of 220,000. Relative to the tuned HRS baseline, this reduces the Toffoli count by15×, the qubit count by2.6×, and
+theT Q-cost by39×.
+Across the three tasks, these techniques reduceT Q-cost by9.9×–39×relative to the tuned HRS baselines.
+IV. QUANTUM CHEMISTRY SIMULATION
+In Pauli-based electronic-structure simulation, the electronic Hamiltonian is a weighted sum of Pauli operators:
+H=
+L−1X
+ℓ=0
+wℓPℓ,(68)
+20
+where each Pℓ is a tensor product ofI, X, Y, and Z. Qubitization encodes this Hamiltonian in a unitary circuit. Such
+an encoding is needed becauseH is not itself unitary and therefore cannot simply be applied to a quantum state.
+Writingλ= Pℓ |wℓ|, an idealPreparecreates a superposition of term labels,
+Prepare|0⟩=
+X
+ℓ
+p
+|wℓ|/λ|ℓ⟩,(69)
+whileSelectapplies the signed Pauli operator with that label:
+Select|ℓ⟩ |ψ⟩=|ℓ⟩sgn(w ℓ)Pℓ |ψ⟩.(70)
+Preparing this superposition, applying the selected term, and reversing the preparation embeds the normalized
+Hamiltonian as a block of a larger unitary:
+(⟨0| ⊗I)Prepare†SelectPrepare(|0⟩ ⊗I) =X
+ℓ
+wℓ
+λ Pℓ = Hλ .(71)
+Qubitization combines this block encoding with a reflection about the prepared state to form a quantum walk operator
+U with eigenvaluese±iarccos(E/λ), where E ranges over the eigenenergies ofH. Phase estimation onU therefore yields
+the energies; because it appliesUmany times, the cost of one application sets the cost of the simulation.
+We use theFe2S2 integral data published by Li and Chan[67], which models 30 active electrons in 20 spatial orbitals.
+Iron–sulfur clusters are important strongly correlated targets, in which many electronic configurations contribute
+significantly to the ground state [68, 69]. Each spatial orbital has a spin-up and a spin-down mode, so these 20 orbitals
+become 40 spin-orbitals and, after the Jordan–Wigner mapping, 40 qubits. Discarding terms with|wℓ|< 10−4 Ha,
+following the truncation practice of sparse qubitization [64], leavesL= 41,052signed Pauli operators.
+State-of-the-art resource estimates for this system use double-factorized tensor hypercontraction (DFTHC), which
+compresses the Hamiltonian into factors and orbital rotations before circuit construction [69]. However, studying
+the DFTHC walk operator would require validating networks of continuously parameterized Givens rotations acting
+on superposed states, which goes beyond thekickmixframework. We therefore focus on the more direct sparse
+compilation, which stores the Hamiltonian as an explicit list of its Pauli terms.
+In this section we study the data-dependent part of one application ofU: the alias selection insidePrepare, the
+Selectapplication, and the erasure of the selection. Directly preparing the unequal amplitudes in Equation (69)
+is expensive, so a standard construction uses the alias method [4, 64, 70, 71]. Classical preprocessing spreads the
+probabilities |wℓ|/λ over L equal-sized buckets, one per term. Bucketi is shared between termi and one other term
+alt(i), and a 16-bit thresholdkeep(i)sets the split. The circuit draws a bucketi and a 16-bit valueτ uniformly. It
+selects termiifτ <keep(i)and termalt(i)otherwise:
+h(i, τ) =1[τ <keep(i)],sel(i, τ) =
+(
+iforh= 1,
+alt(i)forh= 0. (72)
+The preprocessing chooses the alternate terms and thresholds so that, across all pairs(i, τ), each termℓ is selected
+a number of times proportional to its weight, rounded to 16 bits. Thus choosingi and τ uniformly produces the
+rounded distribution. Let Ualias denote the reversible computation ofh and sel from i and τ. The data-dependent
+circuit studied here isU †aliasSelectUalias: it computes the selected term, applies its signed Pauli operator, and erases
+the selection, leavingi and τ unchanged. The uniform-superposition preparation ofi and τ, its reversal, and the walk
+reflection lie outside this circuit.
+Each table row stores its threshold, its alternate index, and the signs of both possible coefficients. We call this 34-bit
+record thealias word. Writeθ ℓ = 0for a positive coefficient andθℓ = 1for a negative one.
+To state the required action on the system registerx, observe that on a computational-basis state,X flips a bit,Z
+contributes a sign determined by that bit, andY does both. For termℓ, let aℓ mark the qubits on whichPℓ contains
+X or Y, and letzℓ mark those on which it containsZ or Y. Write nY (Pℓ)for the number of Y factors in Pℓ. Every
+Pauli operator in the table contains an even number ofYfactors, so its phase is real:
+Pℓ |x⟩= (−1) ηℓ⊕parity(x∧zℓ) |x⊕a ℓ⟩, η ℓ = nY (Pℓ) mod 42 .(73)
+The required map is therefore
+|i⟩16 |τ⟩ 16 |x⟩40 7− →(−1)ϕ |i⟩16 |τ⟩ 16 |x⊕a sel⟩40 ,(74)
+21
+where
+ϕ=θ sel ⊕η sel ⊕parity(x∧z sel).(75)
+The comparison bith and the selected index do not appear in this map: they are intermediate values that the circuit
+must return to zero. We require this map exactly for everyi <41,052, everyτ, and every 40-bit system state.
+The baseline combines the circuits used in sparse qubitization [4, 64]. QROM loads the 34-bit alias word, merging
+repeated alias words [66]. A comparator then calculatesh(i, τ)to choose between i and alt(i)and apply the selected
+coefficient sign. A second, independent traversal oversel applies the selected Pauli operator to the 40 system qubits.
+The baseline then erases the selected index, the comparison bith, and the alias word.
+The lookup and the row-by-rowSelecttraversal cost 13,000 and 41,000 Toffolis, respectively; together they
+contribute more than97%of the total. The remaining comparison, selection, and cleanup bring the baseline to 55,000
+Toffolis and 139 qubits. The main opportunity is to shorten the two table traversals.
+For arbitrary, unstructured table data, QROM has no pattern to exploit: in the worst case, every address may store
+an unrelated word. However, this table is not arbitrary. Its Pauli operators and coefficients come from a physical
+system with exact spin symmetries and repeated orbital environments, so many coefficients are equal and many Pauli
+operators are related. We therefore choose the table to suit the circuits. Two degrees of freedom make this possible.
+First, permuting terms together with their coefficients and Pauli operators leaves Equation (68) unchanged. Second,
+many different alias tables realize the same rounded distribution. The preprocessing uses the first freedom to group
+Pauli operators related by fixed Clifford transformations into blocks, shorteningSelect. It uses the second to place
+equal alias words into repeated patterns, shortening QROM.
+Frame-blockSelect.Many Pauli operators in this Hamiltonian are related by fixed Clifford transformations,
+which we callframes. Suppose, for example, that two commuting frames generate four related Pauli operators from
+one representative. Instead of selecting four operators independently, the circuit selects the representative once and
+uses two bits of the address (the selected row index) to control the two frames. More generally,k such bits can identify
+up to2 k operators in a block. The circuit pays for one block representative plus its controlled frames, rather than
+every Pauli operator separately.
+The circuit applies a frame by conjugation. It appliesσ† to the system register under a control, then the representative
+P, then σ under the same control. The result isσP σ† when the control is set andP otherwise. Each frame is applied
+once for the whole table rather than once per block. Blocks that use the same frames are contiguous, so a few
+comparisons of the address with fixed boundaries determine which frames are active.
+These relations have a physical origin: the model contains two equivalent spin channels, two similar iron sites, and
+corresponding orbitals on repeated parts of the cluster. These repetitions create Pauli operators that are related by
+a fixed transformation. Each frame is a permutation or change of basis of the spin-orbitals. The Jordan–Wigner
+mapping turns it into a fixed Clifford transformation of the 40 system qubits.
+Two of the frames used here come from exact spin symmetries of the Hamiltonian. Because the model treats the
+spin-up and spin-down channels identically,σαβ exchanges the spin-up and spin-down modes of every spatial orbital.
+Spin-rotation symmetry produces a second pairing after the Jordan–Wigner mapping:σXY exchanges the X and
+Y factors and adjusts the accompanyingZ strings required by that mapping. Both transformations preserve the
+corresponding coefficient magnitudes.
+The other five frames come from parts of the cluster that resemble each other; unlike the two spin frames, they
+are not symmetries of the full Hamiltonian. The frameσFe is the approximate left–right reflection of the cluster,
+which exchanges the two iron centers and their surrounding orbitals. The frameσ′Fe combines this reflection with
+several local orbital swaps and matches Pauli operators that the bare reflection misses. The framesσthio, σ3d, and σµS
+exchange corresponding orbitals on the terminal thiolates, the iron3d shells, and the bridging sulfur atoms. These
+sites have similar but not identical electronic environments: the permutation often maps one term’s Pauli operator
+onto another’s, but the coefficients differ. Only the Pauli relationPℓ′ = σPℓσ† must hold exactly;wℓ′ and wℓ remain
+independent entries in the alias table.
+The preprocessing thus finds a commuting family of seven frames and orders related Pauli operators into blocks
+whose sizes are powers of two, so that address bits index the operators within a block. The 41,052 terms form 3,221
+blocks. Selecting the block representatives costs 3,327 Toffolis. Applying the seven frames and determining which are
+active costs 534. Figure S4 shows the resulting structure.
+Alias table with repeated rows.Recall that each alias-table row is a probability bucket split between its own
+term and one alternate term. A term whose weight is smaller than one bucket leaves empty space in its row; a term
+whose weight is larger than one bucket fills such space in other rows.
+A standard alias construction may pair underfilled rows with heavy terms in many different ways. Our preprocessing
+chooses these pairings to make nearby rows identical. For example, if four light rows of equal weight must draw
+22
+0 10,000 20,000 30,000 40,000
+Table row index
+1
+2
+4
+8
+16
+32Terms per block
+σαβ , σXY , σF e, σ′F e, σthio
+σαβ , σXY , σF e, σ′F e, σ3d
+σαβ , σXY , σF e, σ′F e, σµS
+σαβ , σXY , σF e, σ′F e
+σαβ , σXY , σF e, σ3dσαβ , σXY , σF e, σµS
+σαβ , σXY , σF e
+σαβ , σXY , σ′F e
+σαβ , σF e, σ′F e
+σαβ , σXY
+(a) Frame-blocked table layout
+S
+S S
+Fe Fe
+S SσF e
+S
+0
+8
+16
+24
+31Row in block
+σαβ
+σXY
+σF e
+σ′F e
+σthio
+0 10 20 30
+System qubit
+(b) One ﬁve-frame block
+I X Z Y
+0 2 4
+|w| [10−4 Ha]
+FIG. S4Frame structure of the Fe2S2 alias table. (a) The preprocessing places Pauli operators related by fixed
+Clifford frames into contiguous blocks. This groups the 41,052 table rows into 3,221 blocks thatSelecthandles as
+units. Band height gives the number of terms in each block, and the labels give the frames used to generate them.
+Inset: the Fe2S2 cluster core (thiolate substituents omitted); the dashed line marks the iron-site reflectionσFe. (b) One
+block of 32 Pauli operators generated from a representative operator using five frames. Each row of the left matrix
+specifies which frames are applied; a dark cell means that the frame named below its column is included. The center
+shows the resulting Pauli operator on the 40 system qubits, and the bar on the right gives its coefficient magnitude.
+The spin framesσαβ and σXY , shown in the first two columns, preserve coefficient magnitudes and therefore produce
+equal-weight groups of four. The other three frames need not preserve the coefficients.
+their alternate terms from two heavy termsA and B, an ordinary schedule might alternateA, B, A, B; ours prefers
+A, A, B, B. Rows 1–2 then share a threshold, an alternate term, and hence an alias word, as do rows 3–4.
+This strategy is particularly effective here because the two exact spin frames produce many groups of four equal
+weights (Figure S4(b)). The coefficients also span a broad range, so heavier terms can supply the missing weight of
+many lighter rows. Because the pairing only redistributes each term’s weight among buckets, it preserves the rounded
+distribution and creates long runs of identical alias words without breaking the frame blocks. Of the 20,374σαβ-related
+row pairs it places next to each other, 18,463 store identical alias words.
+The alias-table QROM realizes this saving by pruning the binary tree over its addressi. Whenever the two halves
+of a subtree contain the same sequence of alias words, the QROM visits one copy and skips the address bit that
+distinguishes them. For example, the eight-row patternA, A, B, B, A, A, B, Bconsists of two identical halves, so the
+top address bit is irrelevant and the circuit looks up onlyA, A, B, B. Together, this scheduling and repeated-subtree
+pruning reduce the cost of the alias-table QROM to 10,000 Toffolis, compared with 41,000 for a row-by-row traversal
+and 13,000 for the baseline lookup with merged repeated alias words.
+The rest of the circuit follows the baseline. A comparator computesh, a controlled swap moves the selected index
+into place, and both are reversed afterSelect, for 64 Toffolis. The circuit then clears thekeep and alt fields by MBU
+and corrects the resulting phase in one pass over the addressi, for 782 Toffolis.
+We test every table row and a further224 uniformly random inputs. The discovered circuit uses 15,000 Toffolis and
+126 qubits, for aT Q-cost of1 .9 × 106. Relative to the baseline, this reduces the Toffoli count by3.7×, the qubit count
+by9.4%, and theT Q-cost by4.1×.
+The amount of compression is specific to this Hamiltonian, but the preprocessing can search for such relations in
+other sparse Pauli tables, and it falls back to conventionalSelectand QROM costs when it finds none. Exact spin
+symmetry is common in spin-independent molecular Hamiltonians, so the scheduling strategy should carry over. The
+opportunity is smaller when a Zeeman term or spin–orbit coupling breaks the spin symmetries. In DFTHC, analogous
+choices arise in the factorization itself [69, 72]: the factorization is not unique, and a circuit-aware choice could make
+its coefficient data repeated or sparse and therefore cheaper to load.
+23
+V. NONABELIAN LATTICE-GAUGE SIMULATION
+In Hamiltonian lattice gauge theory, space is replaced by a grid. A gauge-field configuration assigns a group element
+Ui(x)to each directed edge, or link, from sitexin directioni. This element describes how the gauge field transports a
+state between neighboring sites; traversing the link backward contributes its inverseUi(x)−1. Multiplying the links
+around a closed path therefore describes the net transport along that loop. Although this product depends on an
+arbitrary convention at each site (the gauge), the real part of its matrix trace does not, and these loop traces form the
+magnetic energy [73]. Because the gauge group is nonabelian, its elements need not commute, so the links must be
+multiplied in the order in which the path traverses them.
+We consider the group-register formulation of Hamiltonian lattice gauge theory [73], in which a register holds the
+group element of each link. The Hamiltonian separates into an electric (kinetic) termHE and a magnetic (potential)
+term HB. A Trotter step evolves these terms separately. Here we implement the magnetic evolutione−i∆tHB for the
+improved Hamiltonian of Carenaet al.[74]. The smallest loop contributing toHB goes around one square face of the
+lattice and is called aplaquette; the standard magnetic term sums a trace over these four-link loops. The improved
+Hamiltonian adds weighted2× 1rectangles, which cancel the leading discretization error. Thus the magnetic evolution
+requires the same basic operation at many locations: follow a short closed path, multiply its links in order, extract a
+trace, and add the weighted result to the phase. The compilation task studied here is one application of the magnetic
+evolution to the whole lattice, which we call themagnetic layer.
+We use a periodic4× 4 × 4lattice [75]. The lattice has 192 links, and the layer contains 192 four-link plaquettes
+and 384 six-link rectangles. For directionsiandj, representative loop products are
+Pij(x) =U i(x)Uj(x+ ˆi)Ui(x+ ˆj)−1Uj(x)−1,
+Rij(x) =U i(x)Ui(x+ ˆi)Uj(x+ 2ˆi)Ui(x+ ˆi+ ˆj)−1Ui(x+ ˆj)−1Uj(x)−1. (76)
+Here ˆi is one lattice step in directioni, with coordinates wrapping modulo four. Plaquettes use the pairsi < j, and
+rectangles use both orderingsi̸=j.
+To store each link in a finite register, we restrict its value from the continuous groupSU (3)to the 216-element
+subgroup G = Σ(72 × 3) ⊂SU (3)used by Osorio Perezet al. [37]. We encode these elements using the unique normal
+form
+g=ω pC qErV 2s+tX u, p, q, r∈ {0,1,2}, s, t, u∈ {0,1},(77)
+where ω = e2πi/3 and C, E, V, Xare fixed matrices that generate the group. These six exponents are the coordinates
+of a group element. Each three-valued exponent uses two qubits and each binary exponent one, for nine qubits per link
+and 1,728 in total. We writeg for the value of one link andg0, . . . , g191 for all of them. Settingu = 0in Equation (77)
+gives the 108-element subgroupΣ(36×3), whileu= 1gives its other coset.
+The main difficulty in multiplying two group elements is that the generators do not commute. For instance, within
+theω, C, Epart, the relationEC=ωCEgives
+(ωP C QER)(ωpC qEr) =ω P+p+Rq C Q+qER+r,(78)
+with exponents modulo three. MovingV through the C, Epart similarly transforms several coordinates. The action of
+Xis more involved:
+XC=C 2EX, XE=ω 2CEX, XV=ω 2EV 3X, X 2 =C 2V 2.(79)
+Consequently, when the left factor containsX, every coordinate of the right factor must be rewritten before the two
+can be combined. Algorithm S1(a) gives the general rule.
+Each g∈G can be written as a3× 3matrix Mg, and each completed loop product contributes toHB only through
+the seven-valued function
+f(g) = 2 Re Tr(Mg)∈ {−3,−2,−1,0,1,2,6}.(80)
+Let SP and SR be the sums off over all plaquettes and rectangles, respectively. For the improved discretization,HB
+is proportional toSP − 120 SR [74]. We represent these phase weights as 51-bit integersaP and aR. The weight aP
+depends on the time step and the coupling, so we use a generic 51-bit value, and we chooseaR so that aR/aP ≈ −1/20.
+Because all of the loop traces are diagonal in the group-element basis, the magnetic evolution leaves each link
+configuration unchanged. In our 51-bit representation, the target operation multiplies each link configuration by the
+phasee 2πi(aP SP +aRSR)/251. We implement this operation using a reusable phase-gradient state, which satisfies
+|PG51⟩= 1√251
+251−1X
+k=0
+e−2πik/251 |k⟩,ADD y |PG51⟩=e 2πiy/2 51 |PG51⟩,(81)
+24
+Algorithm S1General normal-form multiplication and the specialized running-product update. The former supports
+two arbitrary operands in the original normal form; the latter uses different factor orders for the running product and
+the incoming link, storeseP=P+QR, and writesm= 2s+t.
+(a) General normal-form product
+Input:running productW=ω P CQERV M X υ
+linkg=ω pCqErV mX u
+Output:W←W gin the original normal form
+1:ifυ= 1then▷apply Equation (79)
+2: Writem= 2s+t, withs, t∈ {0,1}
+3:p 0 ←p+qr+ 2·1[q= 2] + 2·1[r̸= 0] (mod 3)
+4:(q 0, r0)←(2q+r, q+r) (mod 3)
+5:p←p 0 + 2s+sr 0 + 2t(mod 3)
+6:(q, r)←(q 0 +s, r0 +s+t(1 +s)) (mod 3)
+7:s←s⊕t
+8:m←2s+t
+9:ifu= 1then▷applyX 2 =C 2V 2
+10:p←p+ (1−t)(2−s)r(mod 3)
+11:q←q+ (1−t)(2−s) (mod 3)
+12:r←r+t(2−s) (mod 3)
+13:s←s⊕1
+14:m←2s+t
+15:end if
+16:end if
+17:ifM= 0then▷commuteC qEr throughV M
+18:(δp, q ′, r′)←(0, q, r)
+19:else ifM= 1then
+20:(δp, q ′, r′)←(2qr,−r, q)
+21:else ifM= 2then
+22:(δp, q ′, r′)←(0,−q,−r)
+23:else
+24:(δp, q ′, r′)←(2qr, r,−q)
+25:end if
+26:P←P+p+δp+Rq ′ (mod 3)
+27:(Q, R)←(Q+q ′, R+r′) (mod 3)
+28:M←M+m(mod 4)
+29:υ←υ⊕u
+(b) Specialized running-product update
+Input:running productW=ω P V M X υo CQER
+linkg=ω pCqErV 2s+tX uo
+Output:W←W gin the specialized representation
+1: eP← eP+p+qr+Qr+ 2Rq(mod 3)
+2:(Q, R)←(Q+q, R+r) (mod 3)
+3:ift= 1then
+4:(Q, R)←(R,−Q) (mod 3)
+5:end if
+6:ifs= 1then
+7:(Q, R)←(−Q,−R) (mod 3)
+8:end if
+9:ifu= 1then
+10:(Q, R)←(Q−R,−Q−R) (mod 3)
+11:end if
+12:M←M+ (−1) υ(2s+t) + 2υu(mod 4)
+13:υ←υ⊕u
+where ADDy denotes modular addition byy. Taking y = aP SP + aRSR therefore applies the desired phase to the link
+registers while leaving the phase-gradient state unchanged. This reduces the compilation task to constructing the
+underlying reversible addition
+|g0 · · ·g191⟩ |k⟩ 7− → |g0 · · ·g191⟩ |k+aP SP +a RSR mod 251⟩,(82)
+for arbitrary computational-basis valuesk.
+The baseline treats all 576 loops independently, combining the inversion and multiplication circuits of Osorio Perez
+et al. [37], whose innerΣ(36 × 3)circuits come from Gustafsonet al. [76]; we implement these circuits from the
+published descriptions. For a loopL, let a(L) = aP for a plaquette anda(L) = aR for a rectangle. For each loop,
+the baseline starts withW = 1and successively multiplies the four or six directed links into it, soW is the running
+product of the links traversed so far. After completing the loop, the baseline looks up the 51-bit addenda(L)f (W )by
+QROM [4], adds it tok, and reverses the lookup and loop product. Each multiplication costs 146 Toffolis and each
+link inversion costs 87. A plaquette costs 1,702 Toffolis and a rectangle costs 2,460, so the 192 plaquettes and 384
+rectangles cost 1.3 million Toffolis. The baseline peaks at 1,927 qubits.
+The discovered circuit combines three optimizations. First, it uses different factor orders for the links and the
+running product, which makes updates ofW cheap. Second, it reuses partial loop products across the layer instead
+of computing every loop from the identity. Third, it avoids QROM by reading the trace value directly from the
+coordinates ofWand using the result to control the addition of a known constant.
+Specialized running-product representation.Repeatedly multiplying the running productW by links dominates
+the cost, so the circuit uses a representation tailored to the restricted updateW←W g rather than to arbitrary group
+multiplication. Multiplication in the original normal form is costly in part becauseXhas a complicated conjugation
+action. However, the normal form can use any element of theu = 1coset in place of X. We replaceX by Xo = CEX.
+Because Xo differs from X only by factors ofC and E, rewriting a link in terms ofXo changes only p, q, r. Xo is the
+unique such element that satisfies
+XoV X−1o =V −1, X 2o =V 2.(83)
+25
+Compare these relations with Equation (79): theV, Xo part now closes on itself instead of spilling corrections into the
+other coordinates.
+After making this replacement, the circuit uses different factor orders for the links and forW. Each link is recoded
+as
+g=ω pC qErV mX uo ,(84)
+whereas the frequently updated product is stored in the opposite order,
+W=ω P V M X υo C QER,(85)
+with p, q, r, P, Q, R∈Z3, m, M∈Z 4, and u, υ∈Z 2. This places the incoming and accumulatedC, Efactors next to
+one another inW g, so they can be combined directly before a few fixed permutations account for the remaining factors.
+One complication remains: reordering the factors would ordinarily introduce recurring corrections to the coordinateP.
+The circuit stores eP = P + QR (mod 3), folding those corrections into the coordinate itself rather than recomputing
+them during every multiplication.
+The 192 links are recoded once before the first loop and restored after the last. Each recoded link remains in a
+compact nine-qubit encoding; storing every link one-hot would cost three additional qubits per link. In contrast, there
+is only one running product, so we can afford to store its three-valued coordinateseP, Q, and R one-hot (three qubits,
+exactly one set), increasing the size ofW from nine to twelve qubits. Adding one modulo three then becomes a cyclic
+permutation of three qubits, while negation becomes a single swap. Controlled additions and the fixed transformations
+above can therefore use controlled qubit permutations rather than arithmetic on the two-qubit encoding. Together,
+these representation choices reduce each update ofW from 146 Toffolis in the baseline’s general multiplication circuit
+to 35 Toffolis. Multiplying by an inverse linkg−1 costs the same, so the circuit needs no separate link inversion.
+Algorithm S1 gives the complete coordinate rules for both representations.
+Reusing loop products.The baseline constructs each loop product from the identity and then reverses the
+construction. Neighboring loops, however, often share a sequence of factors. The discovered circuit therefore retains
+W after one trace evaluation and edits it into the product needed for the next, reusing the shared factors instead of
+rebuilding them.
+More loops share factors than first appears, because the real trace is invariant under cyclic rotation and inversion:
+f(h 1h2 · · ·hn) =f(h 2 · · ·hnh1) =f((h 1h2 · · ·hn)−1).(86)
+The first equality is cyclicity of the matrix trace; the second follows because these matrices are unitary andf takes the
+real part. For example, to changeabcde into abcxy, the circuit right-multiplies bye−1 and d−1 to cancel the old suffix,
+then appends x and y, retaining the common prefixabc. Inverting W, which costs 21 Toffolis, makes the other end of
+the product available for the same operation. Cyclic rotations and inversion also give several equivalent ways to write
+each loop, which we call itsrepresentatives, all with the same value off. As Figure S5(a) illustrates, a good choice can
+expose a longer segment shared with the next loop. A classical dynamic program chooses the representatives and the
+order in which the loops are evaluated, minimizing the cost of transformingW between consecutive representatives.
+The chosen schedule uses 3,136 link multiplications and 480 inversions ofW for the 576 loops, about 5.4 multiplications
+per loop. By comparison, building and reversing each loop separately takes 6 multiplications for a plaquette and 10 for
+a rectangle.
+Reading the trace directly.The baseline in Figure S5(b) usesW as the address of a 216-entry QROM and loads
+a full 51-bit addend, althoughf (W )has only seven possible values. The discovered circuit instead computes which of
+the seven values occurs. In the specialized representation, a small Boolean circuit acting directly on(eP , M, υ, Q, R)
+computes six flag qubits, one per nonzero trace value, of which at most one is set (Figure S5(c)). Each flag controls
+the addition of the corresponding constanta(L)v to k, where v is the flagged trace value, so the circuit never stores a
+51-bit lookup result. Computing the six flags costs 20 Toffolis. Readout, addition, and cleanup cost 76 Toffolis for a
+plaquette and 75 for a rectangle, compared with 478 for the baseline QROM lookup, addition, and unlookup.
+We test the complete circuit on 100,000 random inputs and each group operation on all of its inputs. The discovered
+circuit uses 170,000 Toffolis and 1,859 qubits, for aT Q-cost of3 .2 × 108. Relative to the baseline, this reduces the
+Toffoli count by7.4×, the qubit count by3.5%, and theT Q-cost by7 .7×. Updates of W account for 110,000 of the
+Toffolis, trace readout and addition for 43,000, inversions ofWfor 10,000, and link recoding for 8,832.
+26
+(a) Local loop representatives
+Pij Rij
+Rji
+ˆi
+ˆj
+(b) Baseline lookup and addition
+9
+51
+51
+W QROM
+216entries unlookupA:|0⟩
+ADD51
+k
+214 Toffolis 50 Toffolis 214 Toffolis
+(c) T race readout and addition
+6
+51
+~P
+uncompute
+f(W)
+M
+υ
+Q
+R
+c:|0⟩
+k +a(L)f(W)
+W
+(Q, R)
+(M, υ)
+f(W)
+20 Toffolis
+6 Toffolis
+FIG. S5Loop geometry and trace accumulation in the nonabelian lattice-gauge circuit. (a) The blue, orange, and
+green paths are cyclic or inverted representatives ofPij, Rij, and Rji whose trace values equal those of Equation (76)
+by Equation (86); the dark segment is shared after these symmetry choices. (b) The baseline lookup, modular addition,
+and unlookup for a completed loop product. (c) The trace readout, drawn as a truth table over the coordinates
+( eP , M, υ, Q, R)of the specialized representation, followed by the controlled addition. Rows encode(M, υ), columns
+encode(Q, R), and the highlighted cell and stripes show how(M, υ, Q, R)and thenePdetermine the trace value.
+27
+Appendix
+Appendix A: Exact branch recovery for divstep inversion
+This appendix proves the decoding rule of Equation (9) [16]. The argument first establishes the invariants carried by
+the coefficients fv and gv, then identifies the decisions already visible from the updated state, and finally shows how
+the remaining bitb is encoded in a window of low-order bits. Letp be an odd positive integer and let0≤w < p. The
+walk begins at
+(z, f, g, fv, gv) = (0, p, w,0,1).(A1)
+Every step follows the recurrence
+(z′, f′, g′, f′v, g′v) =
+
+
+
+(−z, g,(g−f)/2,2g v, gv −f v)forz≥0, godd,
+(z+ 1, f,(g+f)/2,2f v, gv +f v)forz <0, godd,
+(z+ 1, f, g/2,2f v, gv)forgeven.
+(A2)
+Let s indicate whether the step swaps, and letb = 1exactly when g is odd, sob records whether the two values are
+combined before halving. In this notation,s = 1selects the first case of Equation (A2); whens = 0, the value ofb
+selects the second or third case. The walk freezes whengfirst becomes zero; the steps before that areactive.
+For an integeru and k≥ 0, write u[k] ∈ {0, 1} for bit k of umod 2k+1, counted from zero. This notation agrees
+with the usual binary digit foru≥ 0and with the two’s-complement digit foru <0. We also writebitk(u) = u[k]. Let
+v2(u)denote the number of trailing zero bits ofu(its2-adic valuation), withv 2(0) = +∞.
+We first show, via the determinant and scaling relations, that the integer recurrence computes a modular inverse.
+Lemma A.1(Basic invariants).Every reachable state satisfies
+f gv −gf v =p.(A3)
+Moreover,fandg v are odd andfv is even.
+Proof.The initial state givesp·1−w·0 =p. Direct substitution in the nonswap and swap cases gives
+f(g v +bf v)− g+bf2 (2fv) =f gv −gf v,(nonswap),
+g(gv −f v)− g−f2 (2gv) =f gv −gf v,(swap). (A4)
+Hence every active step preserves the determinant, while a frozen step leaves the state unchanged. The parity claims
+also hold at the initial state. On a nonswap,f remains odd, f ′v = 2fv is even, andg′v = gv + bfv is odd. On a swap,
+the swap condition (g odd) makes f ′ = g odd, while f ′v = 2gv is even andg′v = gv −f v is odd. Induction proves all
+four claims.
+Proposition A.2(Scaling and termination).Aftertactive steps,
+fvw≡2 tf(modp), g vw≡2 tg(modp).(A5)
+Ifgcd(p, w) = 1, then at terminationf=±1,g v =f p, and
+w−1 ≡f fv2−t (modp).(A6)
+Proof. The congruences hold at the initial state. Substitution in Equation (A2) shows that if they hold aftert active
+steps, the updated coefficients satisfy them witht + 1in place of t. They therefore hold for everyt. Every step also
+preserves gcd(f, g), so termination withg = 0gives |f| = gcd(p, w) = 1. The determinant invariant then givesgv = f p,
+and multiplying the first congruence byfyields Equation (A6).
+Before turning to the decoding rule, we record the independent worst-case termination guarantee used by the circuit
+analysis.
+28
+Proposition A.3(Worst-case step bound).Let p = 2256 − 232 − 977. For every0 ≤w < p, the walk in Equation(A1)
+reaches g = 0within590active steps. If w >0, its final coefficients satisfy Equation(A6); ifw = 0, the walk starts
+frozen.
+Proof. The worst-case analysis of Wuille[36] guarantees that every0 < w < preaches g = 0within590divsteps. The
+case w = 0starts with g = 0. For0 < w < p, gcd(p, w) = 1because p is prime, so once the walk terminates, the
+remaining claims follow from Proposition A.2.
+We now recover the bitss and b of an active step from its updated state. The bits, and b in two special cases, can
+be read from a few bits of that state.
+Lemma A.4(Locally visible decisions).Every active step has the following properties:
+1. The swap is visible from the updated coefficient:
+s= 1⇐ ⇒f ′v ≡2 (mod 4)⇐ ⇒v 2(f ′v) = 1.(A7)
+Ifs= 0, then4|f ′v; moreover,s= 1impliesb= 1.
+2. Ifs= 0andz ′ ≥1, thenb= 0.
+3. Ifg ′ = 0, thenb= 1.
+Proof. On a swap step, the incomingg is odd, sob = 1; the update also givesf ′ = g, preserving the oddness off.
+Moreover, f ′v = 2gv, which is twice an odd integer by Lemma A.1. On a nonswap step,f ′v = 2fv, which is divisible by
+four. This proves part 1. For part 2, a nonswap hasz = z′ − 1 ≥ 0. Since the swap condition nevertheless failed, the
+incoming valuegwas even, and henceb= 0. Finally, on a nonswap,g ′ = (g+bf)/2. Ifb= 0andg ′ = 0, theng= 0,
+contrary to the step being active; a swap already hasb= 1by part 1. This proves part 3.
+The steps these tests leave undecided, apart from a terminating step, are the nonswaps entered withz <0; we call
+themnegative-counter nonswaps. Their decisions are theambiguousdecisions of SI II.1: the preceding tests do not
+determine b, but the coefficients still retain it. Wheneverfv ̸= 0, put j = v2(fv)and write fv = 2jq with q odd. On an
+updated state, j is the excursion depth defined in the main text, and a swap followed by a run of ambiguous decisions
+is anexcursion. Thejlow-order bits ofg vq−1, which we call thewindow, accumulate successive decisions.
+Lemma A.5(Window invariant).Every reachable state satisfies the following conditions:
+1. Ifz≥0, then2 z+1 |f v.
+2. Ifz <0, thenf v ̸= 0and, withj=v 2(fv)andq=f v/2j, there is an integercsuch that0≤c <2 j and
+gv ≡qc(mod 2 j−z ).(A8)
+Becauseqis odd, part 2 says thatg vq−1 mod 2j−z fits injbits: the−zbits above positionj−1vanish.
+Proof. Proceed by induction along the walk. A frozen step changes nothing. At the initial state,z = 0, fv = 0, and
+2|f v.
+Suppose first that a nonswap begins withz≥0. Thenz ′ =z+ 1andf ′v = 2fv, so2 z′+1 |f ′v.
+Suppose next that a swap occurs atz = D≥ 0. Then z′ = −D and f ′v = 2 gv. By Lemma A.1, gv is odd, so
+v2(f ′v) = 1and the odd part off ′v is gv. Moreover, g′v = gv −f v, while the induction hypothesis gives2D+1 |f v. Hence
+g′v ≡g v (mod 2 D+1).(A9)
+IfD >0, part 2 holds withj= 1andc= 1; ifD= 0, part 1 asks only that2|f ′v.
+Finally, suppose that a nonswap begins withz <0. Let j = v2(fv)and let c be the witness from part 2. Then
+z′ =z+ 1,f ′v = 2fv, and the odd partqis unchanged. Sinceg ′v =g v +bf v,
+g′v ≡q(c+b2 j) (mod 2 j−z ),0≤c+b2 j <2 j+1.(A10)
+The required modulus after the step is unchanged because2(j+1)−z ′ = 2j−z. If z′ < 0, this proves part 2; ifz′ = 0,
+then part 1 asks only that2|f ′v.
+The invariant makes the bitbof every negative-counter nonswap an exact function of the updated state.
+29
+TheoremA.6(Decodingruleforanambiguousdecision).Let( z′, f′, g′, f′v, g′v)be the updated state of a negative-counter
+nonswap. Putj=v 2(f ′v)andq=f ′v/2j. Thenj≥2,qis odd, and
+b= bit j−1
+ 
+g′vq−1 mod 2j = bitj−1 p(f ′q)−1 mod 2j .(A11)
+In particular, for fixed oddp, the bitbis determined by(j, f′ mod 2j, qmod 2j).
+Proof. The step doublesfv, so its incoming valuation isj− 1. The window invariant makes the incomingfv nonzero,
+while Lemma A.1 makes it even; hencej≥ 2. By definition, q is odd. The modulus provided by part 2 of Lemma A.5
+is2 (j−1)−z, which is divisible by2j. The invariant therefore supplies ac with0 ≤c < 2j−1 and gv ≡qc (mod 2j).
+The odd partqis unchanged, and the update gives
+g′v ≡q(c+b2 j−1) (mod 2 j).(A12)
+Since q is odd and0 ≤c + b2j−1 < 2j, bit j− 1of g′vq−1 mod 2j is exactly b. For the second form, reduce the
+determinant identityf ′g′v −g ′f ′v = p modulo2 j. Because2 j |f ′v and f ′ is odd, g′v ≡p (f ′)−1 (mod 2j). Substitution
+into the first form gives the second.
+The proof also shows how the window records the decisions. Immediately after the swap that begins an excursion,
+the window contains1; each subsequent negative-counter nonswap places its bitb in the next higher position. Thus, at
+depthj, the window contains
+1 +
+j−1X
+k=1
+bk2k,(A13)
+whereb k is the bitbof thekth negative-counter nonswap after the swap.
+Corollary A.7(Finite dependence).For each fixed odd p, the bitb at depth j is determined by at most2j bits of the
+updated state.
+Proof. By Theorem A.6, the residues off ′ and q modulo2 j determine b, and each residue is represented byj bits.
+Corollary A.8(Depth-two rule).At every negative-counter nonswap withj= 2,
+b=g ′v[1]⊕f ′v[3].(A14)
+Proof. By Theorem A.6,b = bit1(g′vq−1 mod 4)with q = f ′v/4. Every odd q satisfies q−1 ≡q (mod 4). For oddu and
+v, uv≡ 1 + 2(u[1] ⊕v [1]) ( mod 4), so bit1(uvmod 4) = u[1] ⊕v [1]. Taking u = g′v and v = q gives the result because
+q[1] =f ′v[3].

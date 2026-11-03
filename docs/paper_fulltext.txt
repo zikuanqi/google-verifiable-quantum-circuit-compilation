@@ -1,0 +1,1531 @@
+Leveraging verifiable structure in quantum circuits
+to find more efficient compilations with agentic AI
+Tanuj Khattar, Nicholas C. Rubin, Craig Gidney, Michael Broughton, Guang Hao Low, and Ryan Babbush
+Google Quantum AI, Santa Barbara, CA 93111, United States
+(Dated: October 22, 2026)
+We discuss an effective paradigm of utilizing AI agents to better compile quantum circuits when
+one can constrain bottleneck subroutines to have some form of classically verifiable structure. For
+example, when critical subroutines are composed exclusively of reversible classical logic, phasing
+operations, and measurement based uncomputation, one can efficiently simulate execution for classical
+inputs. This property facilitates efficient certification of approximate circuit synthesis via a form
+of fuzz testing, provided suitable assumptions on the input distribution. While this pattern was
+recently exploited to improve quantum cryptanalysis circuits, here we highlight the flexibility of the
+broader approach by discussing three important applications. (1) The computation of1/√x that
+bottlenecks real space simulations of the Coulomb operator such as those important for modeling
+inertial confinement fusion reactors. (2) The decoding of Reed-Solomon codes which bottlenecks the
+decoded quantum interferometry algorithm when used to approximately solve the optimal polynomial
+intersection problem. And (3) the quantum look-up tables and controlled application of Givens
+rotations that bottleneck the most performant quantum algorithms for simulating chemistry in
+second quantization. We discuss reference implementations of these algorithms and how they can
+be constrained and verified in the interest of seeding a Kaggle competition designed to accelerate
+AI-based research into the optimization of their compilation.
+CONTENTS
+I. Introduction 2
+II. Kickmix circuits and fuzz testing via Fiat-Shamir heuristic 3
+A. The kickmix gate set 3
+B. The kickmix software package in Qualtran 4
+C. Fuzz testing via the Fiat-Shamir heuristic 5
+III. Kaggle competition 6
+A. Benchmark I: Inverse square roots for Coulomb simulations with relevance to fusion reactor design 6
+1. Problem introduction and importance 6
+2. Reference implementation 8
+3. Verification strategy 10
+B. Benchmark II: Reed-Solomon decoding for quantum advantage in optimal polynomial intersection 10
+1. Problem introduction and importance 10
+2. Reference implementation 12
+3. Verification strategy 13
+C. Benchmark III: QROM and Majorana rotations for quantum simulations of chemistry 14
+1. Problem introduction and importance 14
+2. Reference implementation 14
+3. Optimization of DFTHC factorization 15
+4. Verification of circuit for Boolean oracle 17
+5. Verification of Majorana rotations 17
+6. Verification of DFTHC SOSSA block-encoding 19
+arXiv:2610.23832v2  [quant-ph]  21 Oct 2026
+2
+7. Verification and scoring 20
+Classical quantities exposed to the user 21
+IV. Outlook 22
+Acknowledgments 22
+References 23
+A. DFTHC block encoding circuits 24
+1. Tree Majorana coefficients and basis rotation 24
+2. Sum-of-squares generators 24
+3. Registers, address maps, and select bits 25
+4. Circuit order and cost accounting 25
+B.1/√xbaseline circuits 26
+1. Polynomial rescaling to coverxnorm∈[2,4)26
+2. Example calculation of|s⟩ 27
+3. Details on cubic polynomial approximation for1/√w28
+I. INTRODUCTION
+Compiling a fault-tolerant quantum algorithm into a concrete circuit requires navigating a large design space of
+arithmetic decompositions, ancilla-management schedules, and precision trade-offs. Until recently, researchers explored
+this space by hand, often spending months optimizing a single subroutine and proving its correctness step by step.
+Automated circuit optimizers [1–3] help locally, but they preserve exact unitaries on small subcircuits rather than
+changing the algorithm or its approximations. AI coding agents [4] can automate this search if a fast test harness
+checks each candidate circuit and scores its resource cost in a closed loop. For general quantum circuits, checking
+whether a candidate circuit matches a target unitary is QMA-complete [5] and intractable on a classical computer
+above roughly 40 qubits. Fortunately, in many fault-tolerant quantum algorithms, the subroutines that dominate
+the cost do not use arbitrary quantum interference internally [6–12]. Instead, they use only reversible classical gates,
+diagonal phase gates, and measurement-based uncomputation. This structure lets a classical simulator efficiently check
+their approximate correctness on sampled computational basis inputs.
+Ref. [13] used this method in March 2026 to estimate the cost of breaking 256-bit elliptic curve cryptography on the
+secp256k1 curve with Shor’s algorithm. To follow responsible disclosure, the authors withheld the explicit circuits.
+Instead, they released an open-source simulator and test harness with a zero-knowledge proof that their hidden circuit
+passed the randomized tests. Soon after Ref. [13] appeared, theecdsa.fail challenge took their simulator and test
+harness and built a public competition for secp256k1 point addition circuits. The harness checked the approximate
+correctness of each submission in seconds and ranked it by its qubit and Toffoli counts. This fast verification let the
+organizers accept submissions without trusting the participants. Over 100 participants, most without a quantum
+computing background, used AI coding agents to further reduce the Toffoli counts by roughly half [14].
+In this paper, we apply this workflow to three benchmarks beyond cryptanalysis and use them to seed a Kaggle
+competition. We make three main contributions:
+1. We release kickmix, an open-source C++20 and Python package in Qualtran [15] that builds and simulates
+circuits with over108 gates on one CPU core.
+2. We describe a non-interactive verifier that seeds its test inputs with a salted hash of the submitted circuit. We
+also bound the distance between the implemented and ideal output states by the circuit’s failure rate on those
+inputs.
+3. We define three benchmarks and provide a reference implementation for each of them:
+3
+• Phasing by1/√x for first-quantized simulations of Coulomb interactions, such as inertial confinement fusion [9].
+• Reed-Solomon syndrome decoding for decoded quantum interferometry (DQI) on the optimal polynomial
+intersection problem [12, 16].
+• Quantum lookup tables and Majorana rotations for block encodings of electronic-structure Hamiltonians [11].
+Because classical fuzz testing applies only to kickmix circuits, we restrict each benchmark to the kickmix subroutine
+that dominates the algorithm’s cost. When that subroutine interacts with non-kickmix parts such as arbitrary state
+preparation, as in Benchmark III, we price those parts with analytical cost formulas. This pricing ensures that the
+benchmark score still reflects the full algorithm.
+Section II defines the kickmix gate set, describes thekickmix software package, and derives the state-distance bound
+from fuzz testing. Section III describes the background, reference circuit, test distribution, and score for each benchmark.
+Section IV discusses how circuit testing might change as AI agents improve. The appendices derive the DFTHC
+block-encoding circuits and the polynomial approximations in the1/√xbaseline.
+II. KICKMIX CIRCUITS AND FUZZ TESTING VIA FIAT-SHAMIR HEURISTIC
+Optimizing quantum circuits with AI agents requires a fast, reliable way to check whether a candidate circuit works.
+For general quantum circuits, classical simulation takes exponential time, and deciding whether two circuits implement
+the same operation is coNP-complete classically and QMA-complete quantumly [5]. Ref. [13] introduced a restricted
+family of quantum circuits, calledkickmixcircuits, built exclusively from reversible classical gates, diagonal phase
+operations, and measurement-based uncomputation. Because every instruction in this family maps any computational
+basis state to a single computational basis state up to a scalar phase, a classical simulator can run a kickmix circuit on
+computational basis inputs in time linear in gate count.
+Although full quantum algorithms rely on quantum interference across superpositions, many of the subroutines that
+dominate fault-tolerant resource estimates (such as integer arithmetic, quantum lookup tables, and syndrome decoders)
+can be written as kickmix circuits [9, 12, 13, 17]. This structure suggests checking candidate compilations by testing
+them on randomly sampled classical inputs. However, doing so requires care: one must check in each problem context
+that approximate correctness on sampled basis states guarantees high fidelity on the quantum states used by the
+algorithm. When this holds, combining classical trajectory simulation with the Fiat-Shamir heuristic [13, 18] turns
+random-input fuzz testing into a public, non-interactive verification protocol that requires no secret test set. To run
+this verification loop on subroutines exceeding108 gates, we releasekickmix as an open-source C++20 and Python
+package inside Qualtran [15]. On a single CPU core,kickmix builds circuits at2× 107 instructions/s and simulates
+them at6.0× 1010 instructions/s, constructing an86M-gate Decoded Quantum Interferometry circuit in less than
+5seconds and checking102,400syndrome-decoder shots in150seconds.
+A. The kickmix gate set
+When a kickmix circuit runs on ann-qubit computational basis input|x⟩, no instruction creates a superposition over
+multiple computational basis states. A classical simulator therefore needs to store only one bit per qubit wire, one bit
+per classical register wire, and one scalar output phase. Specifically, every instruction in the kickmix gate set falls into
+one of four classes:
+1. Reversible classical gates (X, CX, CCX, and SWAP): Permute computational basis states by updating the stored
+qubit bits directly.
+2. Diagonal phase gates (Z, CZ, CCZ, Z_POW, and NEG): Leave the qubit bits unchanged and update the tracked
+output phase whenever all control qubits hold|1⟩.
+3. Measurement and reset gates (HMR and R): Measure a qubit in theX basis into a classical bit and reset it to|0⟩
+(HMR), or reset a qubit directly to|0⟩(R).
+4. Classical bit operations (BIT_STORE0, BIT_STORE1, and BIT_INVERT): Set classical register bits to0or1, or
+invert them in place.
+4
+Every instruction above can be controlled per gate (if b ) or across blocks via a condition stack (PUSH_CONDITION
+andPOP_CONDITION), running only when all active classical conditions hold1.
+The HMR instruction (pronounced “hammer”) applies a Hadamard gate, measures the target qubitqt in theZ basis,
+and resetsqt to|0⟩. Whenqt holds a functionf(x)of the remaining qubits, thisX-basis measurement yields a random
+outcomeb∈{0,1}and introduces a phase kickback
+|x⟩|f(x)⟩
+HMR
+−−→(−1)b·f(x)|x⟩|0⟩.(1)
+Whenb = 1, classically controlled diagonal gates (such asZ, CZ, CCZ, orNEG) can fix the phase error(−1)f(x) introduced
+by theX-basis measurement. For example, uncomputing a temporary logical-AND wire|x1∧x 2⟩ requires only one
+HMRinstruction followed by a classically controlledCZgate whenb= 1, saving a Toffoli gate [17].
+However, HMR only works when the resulting phase error can be corrected cheaply. If a circuit appliesHMR to a junk
+qubit that remains entangled with the system without fixing its phase kickback, classical trajectory simulation fails
+loudly. The simulator samples a uniformly random bitb∈{ 0, 1}, flips the tracked output phase ifqt·b = 1, and resets
+qt to|0⟩. Without a matching phase fixup, that random sign flip causes the check on sampled inputs to fail with
+probability1/2whenever qt = 1. The reset instructionR is intended only for deallocating qubits already uncomputed
+to|0⟩. Ifq t = 1, the simulator applies a random sign flip, preventing circuits from silently discarding uncleaned junk
+qubits.
+B. The kickmix software package in Qualtran
+The kickmix library is implemented in C++20 with Python bindings inside Qualtran [15]. Inspired by the bit-packed
+stabilizer engine of Stim [19], kickmix is built around two design principles that let humans and AI agents iterate on
+108-gate circuits in seconds.
+First, performance drives every layer of circuit construction, serialization, and simulation. Standard Python circuit
+libraries allocate a separate heap object for every gate and simulate one input at a time, which becomes prohibitively
+slow at10 8 gates. Instead, kickmix stores a circuit using a struct-of-arrays representation grouped by operand
+count: one byte array of opcodes (OpType) alongside separate arrays for1-,2-, and3-qubit arguments, classical target
+and condition bits, and rotation angles. Each1-byte opcode embeds bit flags indicating which operand arrays it
+consumes, letting the simulator step sequential pointers through only the active arrays without padding every gate
+to the worst-case size. Saving and loading a circuit in binary.kmb format transfers each array between memory
+and disk as a contiguous binary block, avoiding per-gate text formatting and parsing. During simulation,kickmix
+bit-packs64to512independent trajectories across CPU SIMD registers so each instruction updates an entire batch of
+shots in parallel. The one exception isZ_POW: because each trajectory maintains its own128-bit fixed-precision phase
+accumulator rather than a single sign bit, aZ_POW instruction cannot update the whole batch with a single bitwise
+SIMD operation. Instead, it scans the active shot mask across all trajectories in the batch and adds the rotation angle
+to each active shot sequentially.
+Second, expressiveness guides the Python builder API so complex end-to-end algorithms remain compact and readable.
+To eliminate the repetitive boilerplate that arises when writing multi-stage fault-tolerant algorithms with measurement-
+based uncomputation,kickmixprovides four abstractions:
+1. Automatic downgrading: Operations accept qubits, classical bits, and compile-time constants interchangeably,
+automatically replacing classically controlled gates with lower-cost instructions, dropping no-ops onFalse
+controls, and supporting block-scoped classical conditions.
+2. NumPy-style broadcasting: Most primitive gates, measurements, and classical bit operations accept both single
+wires and register arrays (km.array), broadcasting scalars against registers or operating elementwise across
+registers, so a single builder call replaces an explicit loop over individual qubits.
+3. Dynamic workspace allocation: The builder provides methods to allocate and free temporary quantum and
+classical registers within a configurable qubit budget. Subroutines can use these methods to request and release
+scratch space locally, and freed qubits are handed back out to later allocations.
+4. Library of common subroutines: The builder provides a library of commonly used fault-tolerant subroutines,
+including temporary-AND gates, QROM table lookups, adders, comparators, finite-field arithmetic, and context-
+managed unary iteration, with paired compute and measurement-based uncompute variants.
+5
+kickmix also includes inspection utilities that generate circuit diagrams and interactive SVG flame charts showing
+where Toffoli gates and qubits are spent across nested subroutines.
+C. Fuzz testing via the Fiat-Shamir heuristic
+To verify a candidate kickmix circuit, we simulate it on computational basis inputs usingkm.Simulator and compare
+the resulting bitstrings and phases against a classical reference. When the input domain is small, we can test every
+basis state exhaustively to certify exact correctness on all inputs. When the input domain is too large to enumerate,
+fuzz testing on a random sample of inputs instead certifies approximate correctness by bounding the probabilityε that
+the circuit fails on a random input. Because verification reduces to bounding this failure rateε, the same procedure
+naturally accommodates approximations in circuit compilations that are correct on almost all inputs, such as dropping
+low-weight carry bits, truncating intermediate registers, or bounding iteration counts to save Toffolis [7, 13].
+A bound on the per-input failure rateε also bounds the error of the circuit on coherent superpositions of inputs. Fix
+the outcome stringr∈{ 0, 1}m of themHMR and R instructions in a kickmix circuit. The circuit then maps each
+computational basis state to one computational basis state times a phase, and we call this linear mapVr. Each HMR or
+R instruction with outcomeb acts as(|0⟩⟨0| + (−1)b|0⟩⟨1|)/√2, so the Kraus operators of the circuit are2−m/2Vr. On a
+basis input, every recordr therefore has probability2−m, which matches the uniform sampling of the simulator. If we
+defer every measurement by copying its outcome into a fresh record qubit, the circuit acts on an input|ψ⟩ =∑xαx|x⟩
+as the isometry
+W|ψ⟩= 2 −m/2∑
+r
+Vr|ψ⟩⊗|r⟩.(2)
+The ideal circuit applies the target unitaryU and leaves the record in the state|+⟩⊗m. LetBr ={x :Vr|x⟩̸ =U|x⟩}
+be the failing inputs for recordr, and letεr =∑x∈Br|αx|2. Thenε = Er[εr]is the probability that a test shot fails
+when x∼|α x|2 and r is uniform. For example, suppose that an input fails only because anR or uncorrected HMR gate
+acts on a qubit in|1⟩. This input fails whenb = 1and is exact whenb = 0. It adds half its weight toε, and it adds no
+error to the branches withb= 0.
+We assume that eachVr maps distinct inputs in the support of|ψ⟩ to distinct outputs. This condition holds when
+each HMR and R gate acts on a qubit that is a function of the other qubits, as in measurement-based uncomputation.
+Each Vr then preserves norms on the support of|ψ⟩ and agrees withU outsideBr. The triangle inequality gives
+∥(Vr−U )∑x∈Brαx|x⟩∥≤ 2√εr for everyr. The record states are orthonormal, so the errors of the branches add inquadrature:
+‖‖W|ψ⟩−U|ψ⟩⊗|+⟩ ⊗m‖‖2 =E r[‖‖‖(Vr−U) ∑
+x∈Br
+αx|x⟩
+‖‖‖2]≤4ε.(3)
+Two unit vectors at Euclidean distanced have an overlap of at least1−d 2/2. Hence the purified output has fidelity at
+least(1 − 2ε)2 with U|ψ⟩⊗| +⟩⊗m. Discarding the record cannot decrease this fidelity. The physical output state is
+therefore within trace distance
+√
+1−(1−2ε) 2≤ 2√ε of U|ψ⟩. This trace distance also bounds the total-variation
+distance for any later measurement. This guarantee requires the verifier to sample test inputs from|αx|2, so each
+benchmark in Section III specifies this distribution.1
+To prevent a submission from hard-coding outputs on a fixed test set, our verifier generates challenge inputs via the
+Fiat-Shamir heuristic [13, 18]. Given a serialized circuit fileC, the verifier hashes the raw bytes ofC with SHA-256
+and uses that256-bit digest to seed a deterministic pseudorandom generator. Changing even a single byte ofC yields
+a completely new SHA-256 digest and a fresh set ofN challenge inputs. In a competition setting, we also combine
+the circuit’s SHA-256 digest with a private salt to derive the generator seed so that participants cannot perform
+seed grinding by repeatedly adding no-op instructions to search for a seed that generates easier test inputs. This
+construction makes verification non-interactive, deterministic, and reproducible once the salt is published, without
+maintaining large secret test sets.
+On each shoti∈{ 1,...,N} , the verifier initializes the input registers to a sampled computational basis state, runs the
+circuit, and checks three conditions:
+1 If the verifier accepts phases withinτ turns, each passing input adds an orthogonal error of norm at most2πτ|αx|. These errors add at
+most2πτto the bound. For the tolerances in Section III, this term is negligible.
+6
+1. Input and output registers hold their expected classical bitstrings.
+2. Every scratch qubit returns cleanly to|0⟩.
+3. The accumulated output phase matches the target phase within the benchmark tolerance.
+If a shot violates any of these conditions, the verifier records a failure. Suppose a circuit fails onk out ofN independent
+shots, giving an empirical failure rateˆε=k/N. If the circuit’s true failure rateε actually exceeded some threshold
+ε+ >ˆε, the probability of observingkor fewer failures acrossNshots by chance would be at most
+Pr(at mostkfailures inNshots|ε≥ε +)≤
+k∑
+j=0
+(N
+j
+)
+(ε+)j(1−ε +)N−j.(4)
+Setting the right-hand side of Eq.(4) equal to a target false-pass probabilityδ = 2−128 defines the one-sided Clopper-
+Pearson upper confidence boundε+ on the true failure rateε at confidence level1− 2−128. In particular, when a
+circuit passes allN shots (k = 0), only thej = 0term survives, giving(1 −ε +)N =δ and ε+≈ln (1/δ)/N≈ 88.7/N.
+For example, if a circuit passesN = 10,240shots with zero failures, the chance that it fails on more thanε+ = 1%
+of inputs is at most0.9910240 < 2−128, and passingN = 102,400shots certifies ε+ < 0.1%at the same1 − 2−128
+confidence level. Depending on the benchmark, the verifier either requiresk = 0across all N shots or allowsk≥ 0
+failures and uses the certified upper boundε+ to compute the repetition overhead in the benchmark score.
+III. KAGGLE COMPETITION
+We are launching a public competition on Kaggle, an online platform for machine learning and algorithmic challenges,
+featuring three benchmarks from fusion simulation, decoded quantum interferometry, and quantum chemistry. Each
+benchmark isolates the kickmix subroutine that dominates the fault-tolerant cost of the full algorithm at a fixed
+problem size. In our own runs with AI coding agents, we have found significant improvements over the previously
+published baselines, and we expect further improvements remain to be discovered. For each benchmark, we commit to
+our best internal run via its SHA-256 hash2 and will release our full solutions at the end of the competition. With
+a $150,000 prize pool, we welcome anyone interested in AI-driven optimization, regardless of quantum computing
+background, to try new ideas and push these benchmarks further. Below, we motivate each problem, describe the
+baseline circuit from prior work, and specify the verification contract and score.
+A. Benchmark I: Inverse square roots for Coulomb simulations with relevance to fusion reactor design
+1. Problem introduction and importance
+Quantum simulation of matter is one of the primary applications for quantum computers. This simulation capability
+is even more important where experimental verification is challenging. One such example we recently explored was the
+calculation of stopping power relevant to warm-dense-matter simulation [9]. The calculation of a stopping power is
+critical to the understanding and design of inertial confinement fusion devices. The stopping power calculation itself
+is representative of a broader class of dynamical simulations containing core quantum circuit primitives. Thus our
+focus here is on one of the highest cost algorithmic building blocks. The primitive we focus on in this section is the
+primary bottleneck for the Trotterized time-evolution for a system represented in a first-quantized representation [9]
+and involves the coherent calculation of the inverse distance between two particles.
+Our goal will be to implement the dynamics ofη-electrons represented on a grid interacting under the Hamiltonian
+H=T+U+V(5)
+2 SHA-256 digests of our internal runs:
+Benchmark I (1/√x):4b98f38a52a01fc125da7fc2847f9698abe192519dccf894fd758eccc8f37cea
+Benchmark II (DQI):0701f553a9ac4e8af100f66acfccf2fc82cf5a44c2e5aa765b1d4ace01cbaadb
+Benchmark III (FeMoCo):9b8d070f41dd3b6e10a69dbbae9b047847646d1540de30c7b75799f15692f644
+7
+which involves three terms: 1)T the kinetic energy term for the electron and 2)U the electron-nuclei interaction and
+3) V the electron-electron interaction. For an infinite number of grid points the potential termsU and V are diagonal
+in the position basis and the kinetic energy is diagonal in the momentum basis. To evolve a system of electrons
+interacting under this Hamiltonian by Trotter methods the common strategy is to implemente−iδT and e−iδ(U+V) , for
+a small time valueδ, in the basis where the operator is approximately diagonal. In this work we focus on quantum
+circuit primitives implementing the potential operator evolution
+U=
+η∑
+i=1
+L∑
+ℓ=1
+Zℓ
+|ri−Rℓ| =
+η∑
+i=1
+L∑
+ℓ=1
+Zℓ√
+(xi−Rx,ℓ)2 + (yi−Ry,ℓ)2 + (zi−Rz,ℓ)2 (6)
+V=
+η∑
+i̸=j=1
+1
+|ri−rj| =
+η∑
+i̸=j=1
+1√
+(xi−xj)2 + (yi−yj)2 + (zi−zj)2 (7)
+where we have expanded distance in the Euclidean directions to indicate the main computation needed is the inverse
+square root of the sum of squared differences in each direction. Our focus will be the electron-electron computation as
+this needs to be performed
+(η
+2
+)
+times for anη-particle simulation and is the dominant cost for the total Trotter step.
+We usenp bits to represent positions in sign-magnitude form on a grid for the electronic wavefunction
+|ψ⟩=
+2np−1∑
+x,y,z=0
+c(x,y,z)|x⟩|y⟩|z⟩=
+∑
+r
+c(r)|r⟩.(8)
+The quantum algorithm involves pairwise computation ofV (ri, rj)into a register and phasing bye−iδV(ri,rj) and
+uncomputing theV (ri, rj)computation for each pair. As outlined in Ref. [9] performing the computation pairwise
+instead of for all pairs and summing saves ancilla qubits. The phasing algorithm looks like the following (reproduced
+from Ref. [20], Eqs. 15–17):
+∑
+r1,...,rη
+c(r1,...,r η)|r1,...,r η⟩|000...⟩(9)
+→
+∑
+r1,...,rη
+c(r1,...,r η)|r1,...,r η⟩|V(ri,rj)⟩(10)
+→
+∑
+r1,...,rη
+e−iV(ri,rj)δc(r1,...,r η)|r1,...,r η⟩|V(ri,rj)⟩(11)
+→
+∑
+r1,...,rη
+e−iV(ri,rj)δc(r1,...,r η)|r1,...,r η⟩|000...⟩(12)
+The strategy adopted in Refs. [9, 21] follows a similar trick that was used in the video game “Quake 3” employing a
+single step of Newton-Raphson after construction of a high enough quality initial guess. The C code [22] for this is
+included below
+float Q_rsqrt ( float number )
+{
+long i ;
+float x2 , y ;
+const float t h r e e h a l f s = 1.5 F ;
+x2 = number * 0.5 F ;
+y = number ;
+i = * ( long * ) & y ; // evil f loa ti ng point bit level hacking
+i = 0 x 5 f 3 7 5 9 d f - ( i >> 1 ) ; // what the f ***?
+y = * ( float * ) & i ;
+y = y * ( t h r e e h a l f s - ( x2 * y * y ) ) ; // 1 st i t e r a t i o n
+// y = y * ( t h r e e h a l f s - ( x2 * y * y ) ) ; // 2 nd iteration , this can be removed
+# ifndef Q3_VM
+# ifdef _ _ l i n u x _ _
+assert ( ! isnan ( y ) ) ; // bk0 10 122 - FPE ?
+# endif
+# endif
+return y ;
+}
+8
+which produces an approximation that has a maximum relative error of 0.00175228 over the domain of 32 bit floats
+(IEEE 754-1985). We work with fixed point representation on quantum computers so we will design an algorithm that
+works approximately the same but with a fixed point.
+Due to the accuracy requirements of the total time evolution Ref. [9] determined that 24-bits of relative error would be
+needed for the computation in the inverse square root. Starting from an input register|x⟩ holding the sum of squared
+coordinate differences, we describe the full algorithm for: 1) normalizingx into a bounded range, 2) computing an
+initial guess for the inverse square root, and 3) performing one Newton-Raphson iteration followed by phasing and
+uncomputation. Attendant to this paper we provide a baseline implementation in Qualtran [15]. Our primary task for
+an AI agent to optimize will be the coherent arithmetic and phasing costs for computing steps 1–3 while maintaining
+the 24-bit relative error precision bound. Our baseline implementation is merely a starting point for optimization as
+there are a number of choices one can make in the computation of the inverse square root. For example, not using a
+cubic polynomial over a small rescaled range but a simpler polynomial over a larger range may reduce cost further.
+Also the accuracy of coefficients output by QROM can be further optimized. One could imagine going a completely
+different route and simply finding a good polynomial approximation over the input domain. The number of tradeoffs
+and directions to explore (as in many compilation tasks) makes circuit primitive optimization of this type well posed
+for AI agent exploration. Restricting to kickmix circuits allows efficient exploration of these optimizations by many AI
+agents and will likely lead to large space-time cost reductions.
+2. Reference implementation
+Calculation of the inverse square-root was sketched in Ref. [9] in only enough detail to justify the constant factor analysis.
+Here we describe the full implementation which models the classical fixed point method using a single step of Newton-
+Raphson and provide the reference implementation of the paper. Computingw = (xi−xj)2 + (yi−yj)2 + (zi−zj)2
+from np-bit sign-magnitude coordinates costs3n2p−n p− 1Toffolis (Lemma 8 in Ref. [23]) and lies upstream of
+the benchmark subroutine, which takes|x⟩ = |w⟩ directly as its(2 np + 2)-bit input. The circuit proceeds in
+three stages: 1) normalizingw by shifting out pairs of leading zeros, 2) computing an approximate1/√wnorm by
+polynomial interpolation, and 3) computing a single step of Newton-Raphson iteration followed by phase kickback
+and uncomputation. In the fusion resource estimates we usednp = 6, indicatingw has14bits after squaring and
+lies in the range[1,11532]; the competition benchmark usesnp = 10( η = 218electrons), giving a22-bit input in the
+range
+[
+1,3(2 10−2) 2] = [1,3,133,452]. The range starts at1because we assume an antisymmetrized state as input
+and thus two electrons cannot occupy the same spatial position on the lattice. Whenw is very small1/√w is large–
+w = 1↦→ 1/√w = 1and w = 11532↦→ 1/√w≈ 0.0093. The value0.0093needs ∼ 7leading fractional zeros before its
+first significant bit (and∼ 11leading fractional zeros atnp = 10). To get 24 significant bits of relative error atnp = 6,
+we would need24 + 7 = 31fractional bits (or35at np = 10), making the multiplications expensive. We address this
+by shifting and scaling alongside bit truncation during multiplications.
+1. First, Refs. [9, 21] avoid the high multiplication cost by normalizingw into a bounded range[1, 4)via bit-shifting.
+To see this consider the number of leading zeros in a sampling ofw(fornp = 6):
+
+
+
+w= 3↦→00 00 00 00 00 00 11(12 leading zeros)
+w= 17↦→00 00 00 00 01 00 01(8 leading zeros)
+w= 4096↦→01 00 00 00 00 00 00(1 leading zero)
+w= 11532↦→10 11 01 00 00 11 00(0 leading zeros)
+(13)
+all these numbers have different significant figures and thus padding all the values to the appropriate significant
+figures for2−24 is wasteful. To avoid multiplying many zeros we shiftw into a smaller range using the relationship
+wnorm =w·2 2s (14)
+where s is the number of leading pairs of zeros. By using pairs of leading zeros for rescaling we scale our
+w↦→w norm into the rangewnorm∈[1,4) so that1/√wnorm∈(0.5,1] . Later we will recast the Newton-Raphson
+step in terms ofwnorm and the register storings. Note that this range implies the first digit after the decimal
+will always be a1. We need to count and store how many leading zero pairss there are for eachx and produce
+xnorm by bitshifting. Eachx is stored in a2np + 2size register (14bits at np = 6,22bits at np = 10), and we
+store s in unary in a sizenp ancilla register. To compute the register|s⟩ we sequentially iterate through the bits
+of x and check if a sequential pair is both zero. If so, we flip the bit ins corresponding to that pair and shift the
+register ofxforward by2bits.
+9
+2. After shifting,wnorm always has at least one of its top 2 bits set, so as a 14-bit integer (np = 6): wnorm∈
+[4096,16383] (i.e., bit 12 or 13 is always 1). Instead of fitting a polynomial approximating1/√wnorm over [1,4)
+we will fit a polynomial over range[1,2]and scale appropriately to cover whenxnorm∈[2,4).
+We will split the interval[1,2]in half, and fit the polynomial
+1√x≈P a(x) =a 0−a 1(x−1) +a 2(x−1) 2−a 3(x−1) 3 (15)
+forx∈[1,3/2]and
+1√x≈P b(x) =b 0−b 1(x−1.5) +b 2(x−1.5) 2−b 3(x−1.5) 3 (16)
+forx∈[3/2,2][9] where
+a0 = 0.99994132489119882162,(17)
+a1 = 0.49609891915903542303,(18)
+a2 = 0.33261112772430493331,(19)
+a3 = 0.14876762006038398086.(20)
+and
+b0 = 0.81648515205385221995,(21)
+b1 = 0.27136515484240234115,(22)
+b2 = 0.12756148214815175348,(23)
+b3 = 0.044753028579153842218.(24)
+In Fig. 1 we visualize what this initial guess looks like over the unscaled interval[1, 2]and what happens to
+the guess after one iteration of Newton-Raphson. This demonstrates that within double precision one step
+of Newton-Raphson is sufficient for2−24 relative error. To reuse these polynomials for the[2, 4)interval the
+coefficients must be rescaled. We describe that derivation in Appendix B1.
+FIG. 1. Polynomial approximation on[1,2](range 1:[1,1.5],range 2:[1.5,2]) with{a}and{b}coefficients from Ref. [9].
+A full description of the algorithmic primitives for QROM output of the multiplication coefficients, how to
+rescale the coefficients for the[2, 4)interval, and the multiplications that need to be performed are provided in
+Appendix B3.
+3. Next, we can see what happens to thiswnorm value if we plug it into our Newton-Raphson step. First we will
+find an approximate inverse square root townorm
+y0≈1/√wnorm (25)
+10
+which is related to our true inverse square root value
+y0≈(w·2 2s)−1/2 =w−1/2·2−s (26)
+if we want to get the “true” initial guess we would need to scaley0 by2 s
+yinit =y 0·2s≈1/√w(27)
+We can now do substitutions into our Newton-Raphson step
+y1 =12yinit(3−w·y 2init) (28)
+=12 (y0·2s)(3−w·(y 0·2s)2) (29)
+=12 (y0·2s)(3−w·2 2s·y 20) (30)
+=12 (y0·2s)(3−w norm·y 20) (31)
+which shows we do not need to know the unnormalizedw to run Newton-Raphson, we just need to knowwnorm
+and s the number of pair bit shifts. This rewrite also implies some bitwidth optimizations:wnorm·y 20 is very
+close to1.0and3 − 1will be very close to2. This means for eachw we will compute the normalized version by
+counting leading zero pairs and bit shifting. The result iswnorm which will go into the infrastructure used to
+generate y0. During the Newton step we computep = 12y0(3−w norm·y 20) with the unshifted 17-bity0 first,
+and only then apply the unary-controlled left shifty1 =p≪s . Shifting after the multiplication keeps the final
+multiplier width independent ofnp, saving30np AND gates per direction. Finally, the circuit phases by one
+Z_POWgate per bit ofy 1 and uncomputes stages 1–3 in reverse to restore|x⟩|0⟩.
+|x⟩
+shift by2s
+− −−−−−− →xnorm
+QROM + Cubic Poly
+−−−−−−−−−−−−−→y0
+NR step
+−−−−−→p=12y0(3−x normy20) ≪s−−→y1 =p·2 s Z_POW+ uncomp.−−−−−−−−−−−→e2πi/√x|x⟩
+For the benchmark sizenp = 10(22-bit x), our reference circuit usesQ = 260qubits,7 ,735Toffoli gates,1 T gate, and
+37non-Clifford Z_POW rotations, giving a Toffoli-equivalent cost ofC = 7,988, a space-time score ofQ×C = 2.08× 106,
+and a worst-case relative error of2.84×10−8 = 2−25.07 (atx= 2,588,411).
+3. Verification strategy
+A submission is a single.kmb circuit file implementing|x⟩|0⟩↦→exp (2πiβ/√x)|x⟩|0⟩ for everyx∈ [1,maxx ], where
+the benchmark default setsnp = 10, β = 1, register width2 np + 2 = 22, and maxx = 3(2 10− 2)2 = 3,133,452.
+The circuit must declare exactly one named quantum register"x" of22distinct qubits; all remaining qubits are
+unnamed scratch that must return to|0⟩, and "x" must be restored to|x⟩. Every inputx∈ [1,maxx ]is simulated
+shots_per_x = 64times (200,540,928shots in total) to test the randomized measurement outcomes ofHMR and R
+gates during uncomputation, with the simulator PRNG seeded from the SHA-256 digest of the circuit’s canonical
+.kmb binary serialization (combined with a competition salt). On each shot, the tracked phaseθ(x)(in turns,
+modulo1) is checked in 64-bit fixed point (uint64 units of2−64 turns) against exact integer square-root arithmetic
+⌊265β/√x⌋ = isqrt(⌊2130β2/x⌋). Every shot must pass (k = 0failures) within tolerance tol(x) = 2 −24β/√x
+turns. The benchmark score isS = Q×C , whereQ is the circuit’s total qubit count andC = Toffolis +T/4is
+the mean Toffoli-equivalent cost per shot. CliffordZ_POW angles are free,T-angles cost1 T, and each of thenrot
+finer Z_POW rotations is priced analytically via mixed fallback synthesis at0.56 log2(1/ϵ) + 5.3 T-gates [24], where
+ϵ=πmin x
+(
+tol(x)−|error(x)|
+)
+/nrot splits the remaining phase-error margin evenly across all rotations.
+B. Benchmark II: Reed-Solomon decoding for quantum advantage in optimal polynomial intersection
+1. Problem introduction and importance
+Decoded quantum interferometry (DQI) is a quantum algorithm that uses the quantum Fourier transform to reduce
+optimization problems to decoding problems [16]. We consider its application to the Optimal Polynomial Intersection
+11
+(OPI) problem. An OPI instance specifies a set of allowed valuesFi⊆F q at each of them =q− 1nonzero evaluation
+pointsα i, fori= 0,...,m−1. Forn<m, we seek a polynomialQ x(z) =∑n−1j=0 xjzj that maximizes
+f(x) =
+⏐⏐{i:Q x(αi)∈F i}⏐⏐.(32)
+Thus, a solution is a low-degree polynomial whose evaluations land in as many of the allowed sets as possible. The
+instances considered here have equally sized sets,|Fi|=r.
+OPI is a promising target for an early demonstration of classically verifiable quantum advantage. The quality of a
+sampled solution can be checked efficiently on a classical computer by evaluatingf(x), even when finding a comparably
+good solution is beyond the reach of known classical algorithms analyzed in Refs. [12, 16]. OPI can be viewed as
+fitting a low-degree polynomial over a finite field to observations that specify several possible values at each input.
+Variants of this problem have been studied as Reed–Solomon list recovery in coding theory [25] and noisy polynomial
+reconstruction or interpolation in cryptography [26, 27].
+LetBij =αji be them×n matrix taking polynomial coefficients to evaluations, so that(Bx)i =Qx(αi). The evaluation
+vectorsBx form a Reed–Solomon codeC. For OPI, DQI uses a syndrome decoder for its dual codeC⊥ = ker(BT ),
+which has parameters[m,m−n,n+ 1]and minimum distanced=n+ 1. If this decoder can correct up toℓsymbol
+errors, DQI can prepare a state proportional to∑xP (f(x))|x⟩ for a polynomialP of degreeℓ. Measuring the state
+samples candidate polynomialsQx with probability proportional to|P (f(x))|2. Correcting more errors permits a
+higher-degreeP, allowing DQI to sample solutions with a larger expected number of satisfied constraints [16].
+The connection between preparing∑xP (f(x))|x⟩ and syndrome decoding comes from the quantum Fourier transform
+(QFT) overFnq. For vectorss,x∈F nq with dot products·x= ∑n−1j=0 sjxj∈F q,
+QFT|s⟩= 1√qn ∑x∈Fnq χ(s·x)|x⟩,(33)
+where χ : Fq→C is an additive character satisfyingχ(u +v) =χ(u)χ(v). Forq = 2b, χ(z) = (−1)Tr(z)∈{± 1}, so
+QFT = QFT† is the Walsh–Hadamard transform. Writehi(z) =1[ z∈F i]and let bi∈F nq be rowi of B, so that
+Qx(αi) =bi·x and f(x) =∑m−1i=0 hi(bi·x ). Expandinghi : Fq→{ 0, 1} in the 1D Fourier basis of Eq.(33) (n = 1)
+givesh i(z) =∑y∈Fq ˆhi(y)χ(yz). Evaluating atz=b i·xand pulling the scalary∈F q into the dot product gives
+hi(bi·x) =
+∑
+y∈Fq
+ˆhi(y)χ(y(bi·x)) = ∑
+y∈Fq
+ˆhi(y)χ((ybi)·x ).(34)
+Because hi(z)∈{ 0, 1} satisfies hki =hi for k≥ 1, expandingP (f(x)) =P(∑m−1i=0 hi(bi·x )) gives a linear combination
+of products∏i∈Shi(bi·x )over subsets S⊆{ 0,...,m− 1} of size|S|≤ℓ . Substituting the Fourier expansion(34) for
+each factorhi(bi·x )in such a product, with summation variabley =ei∈F q for i∈S and ei = 0for i /∈S, defines
+an error vectore = (e0,...,e m−1)∈F mq of symbol weightwt(e)≤ℓ . Since χ(u)χ(v) = χ(u +v), multiplying the
+character factors adds their frequency vectors:∏i∈Sχ((eibi)·x ) = χ((∑m−1i=0 eibi)·x) = χ((BTe)·x). Collecting
+terms and applying Eq. (33) to each mode∑xχ((BTe)·x )|x⟩= √qn QFT|BTe⟩gives
+P(f(x)) =
+∑
+e∈Fmq
+wt(e)≤ℓ
+aeχ
+(
+(BTe)·x ),so that ∑
+x∈Fnq
+P(f(x))|x⟩= √qn QFT
+
+ ∑e∈Fmq
+wt(e)≤ℓ
+ae|BTe⟩
+
+.(35)
+This is why the polynomial degreeℓ and the number of correctable errors coincide: before the final QFT, the basis
+states|s⟩are labelled by the syndromess=B Teof errors on at mostℓpositions.
+DQI prepares these components by constructing a superposition of sparse errors and computing their syndromes, giving∑
+eae|e⟩|BTe⟩. The amplitudesae are determined byP and the Fourier coefficients of the individual constraints. To
+obtain the desired Fourier state in the syndrome register, the circuit must erase the error labels without learning which
+error occurred. Givens =BTe and the promisewt(e)≤ℓ , recovering that label is precisely syndrome decoding ofC⊥.
+When2 ℓ≤n , the solution is unique: two such errors with the same syndrome would differ by a codeword of weight at
+mostn, below the minimum distancen+ 1. A reversible decoder can therefore erase the error register,
+∑
+wt(e)≤ℓ
+ae|e⟩|BTe⟩−→|0⟩ ∑
+wt(e)≤ℓ
+ae|BTe⟩.(36)
+12
+An inverse Fourier transform on the syndrome register then produces the optimization state∑xP (f(x))|x⟩, up to
+normalization. Our second benchmark targets this decoding computation, which dominates the DQI circuit cost.
+The improved construction of Ref. [12] uses measurement-based uncomputation (MBUC) to generate and erase error
+symbols one at a time. Forq = 2b, the circuit reuses a singleb-qubit error-value register: at positioni, it prepares
+ei, addseibi to the syndrome, then measures the error-value register in theX basis and resets it. Conditioned on
+the measurement outcomeci∈{ 0, 1}b, each branch of the superposition labeled by error patternei acquires the sign
+(−1)ci·bin(ei), determined by the error value stored in that branch. The accumulated sign from allm error-symbol
+measurements is therefore(−1)c·bin(e), wherec = (c0,...,c m−1)is the classical measurement record. Before the final
+Fourier transform in DQI, the signs introduced by the error-symbol measurements must be cancelled:
+|ψc⟩=
+∑
+wt(e)≤ℓ
+ae(−1)c·bin(e)|BTe⟩↦−→ ∑
+wt(e)≤ℓ
+ae|BTe⟩.(37)
+Herec∈{0,1} mb is the uniformly random measurement record,bin(e)is the binary encoding of the field symbols in
+the chosen basis, and the dot product is binary parity modulo two. Each syndromes in this superposition uniquely
+determines a correctable errore(s), so the required sign depends only onsandc.
+The benchmark is to construct a kickmix circuit that implements this correction on computational-basis inputs:
+Uc|s⟩|0⟩W = (−1)c·bin(e(s))|s⟩|0⟩W, s=B Te(s),wt(e(s))≤ℓ,(38)
+Each test supplies a classical syndromes, encoded as|s⟩, and a classical measurement recordc; the corresponding
+error stringe(s)is withheld. The circuit must preserves, return its workspaceW to zero, and apply the specified sign,
+all of which can be checked by classical kickmix simulation. For fixedc, the target operationUc therefore cancels the
+signs on the DQI superposition in Eq.(37) by linearity. Implementations may recover error symbols one at a time or
+compute the required parity directly, allowing AI agents to optimize the decoding algorithm, arithmetic, and cleanup
+schedule within this contract.
+2. Reference implementation
+We consider an OPI instance overF2b with parameters
+(m,n,b,r) = (4095,70,12,2016),(39)
+wherer =|Fi| = (2b− 2b/2)/2is the bent-function constraint size. These parameters define a dual Reed–Solomon code
+with parameters[4095, 4025, 71]over F212, for which DQI uses a syndrome decoder correcting up toℓ =n/2 = 35symbol
+errors. The input syndrome occupies70× 12 = 840qubits, and the measurement recordc contains4095 × 12 = 49,140
+classical bits. We representF212∼= F2[α]/(α12+α6+α4+α+1)in the little-endian polynomial basis(1,α,...,α 11), order
+the evaluation points asαj =αj for j = 0,...,m− 1, and define syndromessi =∑m−1j=0 ejα(i+1)j for i = 0,...,n− 1.
+The baseline follows the decoder based on the Extended Euclidean Algorithm (EEA) in Ref. [12]. It has three main
+stages.
+1. Solve the key equation.Interpret the syndrome as S(z) = ∑n−1j=0 sjzj. Run the EEA onz2ℓ and S(z),
+stopping when the remainder has degree belowℓ, to obtain an error-locator polynomialσ and an error-evaluator
+polynomialΩsatisfying the key equation
+σ(z)S(z)≡Ω(z) (modz 2ℓ).(40)
+The error-locator polynomial is proportional to∏i:ei̸=0(1−αiz). The zero syndrome is handled byσ = 1andΩ = 0, corresponding to no errors and no phase correction. The baseline uses an optimized variant of Proos
+and Zalka’s synchronized EEA construction [12, 28], which shares registers between shrinking remainders and
+growing Bézout coefficients and stores temporary quotients in available register space. Its output gives explicit
+access to the Bézout coefficients needed by the next stage.
+2. Recover symbols and correct their phases.A Chien search evaluatesσ(α−1i )at each of them positions. A
+zero identifies an error location. At that location, Forney’s formula recoversei usingΩand the formal derivative
+σ′. The circuit appliesZ gates to the recovered symbol bits selected byci, contributing(−1)ci·bin(ei), then clears
+the temporary symbol workspace before proceeding. Positions without an error contribute no phase.
+13
+3. Restore the syndrome and workspace.Uncompute the EEA from Step 1, restoring the original syndrome
+and returning all auxiliary registers to zero. This preserves the phase applied in Step 2, yielding Eq. (38).
+Our reference circuit stores polynomials in two arrays ofn+3registers of b qubits each, and reuses then input syndrome
+registers in the first array. FiveO(logn)-qubit degree pointers track the active remainders, Bézout polynomials, and
+temporary quotients. Each of the3(n + 1) + 9 = 222synchronized EEA steps uses unary iteration over these pointers
+to address and shift active polynomial slices. OverF212, addition, squaring, and multiplication by fixed powers ofα
+are linear overF2 and compile to CNOT gates. Multiplying two quantum field registers uses a63-Toffoli Karatsuba
+circuit, and field inversion uses an Itoh–Tsujii addition chain (315Toffolis and48temporary scaffold qubits). When
+both factors of a temporary field product stay in memory, the circuit erases that product byX-basis measurement and
+classically controlledCZgates [12].
+In Step 2, each of them = 4095positions updates σ, σ′, andΩin place with CNOT gates and runs one Itoh–Tsujii
+inversion ofσ′(α−1i )(351Toffolis per position). In total, the reference circuit uses1,893qubits (2(n+ 3)b+O(logn)
+plus the inversion scaffold) and5,725,461Toffoli gates after Step 3 cleanup. This Toffoli count is slightly higher than
+the5 .2× 106 decoder count in Ref. [12], which used a hand-tuned51-ToffoliF212 multiplier instead of our63-Toffoli
+circuit. Every part of this baseline—explicit remainder storage, pointer-driven EEA steps, polynomial-basisF212
+arithmetic, and per-position Itoh–Tsujii inversion—can be improved.
+3. Verification strategy
+DQI does not require a decoder that succeeds on every input. Every candidate polynomial produced by DQI is checked
+classically by evaluatingf(x), so a decoding failure cannot cause an invalid candidate to be accepted and only reduces
+the probability of sampling a good one. In the DQI state of Eq.(37), each errore with wt(e)≤ℓ carries weight|ae|2
+and maps to a distinct syndromes =BTe. Letε be the probability that the decoder fails on a syndromes =BTe
+with e∼|a e|2, averaged overc and its internal measurement outcomes. By Eq.(3) and the fidelity argument after it,
+the output state of the decoder lies within trace distance2√εof the ideal state.
+Trace distance upper-bounds the total-variation distance between the outcome distributions of any measurement, so
+the implemented DQI circuit samples candidates within total-variation distance2√ε of the ideal distribution. We
+call a candidate acceptable if it satisfies at least as many constraints as the median output of an ideal DQI run. An
+error-free run then succeeds with probabilityp0≥ 1/2. A decoder with failure rateε succeeds on a single run with
+probability at least
+p≥ 12−2√ε.(41)
+To test a submission, the verifier uses the seeded generator of Section IIC to sample an error vectore∼|a e|2 with
+wt(e)≤ℓ . For the degree-ℓ polynomial P maximizing the expected fraction of satisfied constraints (Lemma 9.2 of
+Ref. [16]), the symbol weightw = wt(e)∈{ 0,...,ℓ} has probability Pr[wt(e) =w] =v2w, wherev = (v0,...,v ℓ)is the
+unit principal eigenvector of the(ℓ+ 1)×(ℓ+ 1)symmetric tridiagonal matrixAwith
+Aw,w = w(q−2r)√r(q−r) , A w−1,w =A w,w−1 =√w(m−w+ 1).(42)
+Conditioned on wt(e) = w, the verifier drawsw distinct error positions uniformly from{0,...,m− 1} and draws
+each nonzero symbolej independently and uniformly from Fq\{ 0} (at these parameters, E[wt(e)]≈ 31.05and
+Pr[wt(e) = 35]≈ 2.8%). The verifier then computes thenb-bit syndromes =BTe and samples themb-bit recordc
+uniformly at random. The submitted circuit receivess andc, but note. The verifier checks each shot against the three
+criteria of Section IIC, with target phase(−1)c·bin(e). Fromk failed shots out ofN = 102,400, the verifier computes
+the upper confidence boundε+ onεat confidence level1−2 −128 via Eq. (4).
+The score measures the cost to obtain an acceptable DQI candidate (lower is better). It weights qubits more heavily
+than Toffoli gates:
+S=R(ε +)Q 2T, R(ε) = ln(1−p 0)ln(1−(p 0−2√ε)) = ln 2−ln( 12 + 2√ε),(43)
+where we setp0 = 1/2. HereQ is the total qubit count (syndrome plus workspace) andT is the single-run Toffoli count,
+including workspace cleanup. The factorQ2T measures the single-run cost, so a 1% reduction in qubits improves the
+score as much as a 2% reduction in Toffoli gates.
+14
+The factorR is the repetition overhead from approximate decoding. If each run succeeds with probabilityp, then
+t(p) = lnδ′/ln (1−p )independent runs reach an overall failure probabilityδ′. Lowering the per-run success probability
+from p0 to p0− 2√ε multiplies the number of runs byt(p0− 2√ε)/t(p0) =R(ε)for every δ′. Forε+ = 10−5,10−4,
+10−3, and10−2, the repetition factor isR(ε+) = 1.02,1 .06,1 .21, and1.94. Submissions withε+≥ 1/16receive no
+finite score. With zero failures inN = 102,400shots, ε+≈ 8.7× 10−4, so every exact submission pays the same floor
+R(ε+)≈1.19.
+C. Benchmark III: QROM and Majorana rotations for quantum simulations of chemistry
+1. Problem introduction and importance
+Quantum circuits for state-of-the-art ground-state energy estimation of a second-quantized electronic-structure
+Hamiltonian involve an important class of data-lookup circuits which are leading Toffoli cost. These costs are intimately
+related to the cost of specifying the Hamiltonian and are thus important primitives for algorithms encoding in second
+quantization. Thus their compilation is of interest beyond the benchmark provided here.
+Key to many quantum algorithms is the specification of the operator being simulated. Our primary focus here will be
+using the linear combination of unitary approach which represents an operator as a sum of unitaries multiplied by a
+non-negative real weight. In the chemistry example considered the operator is the Hamiltonian and specifies how the
+system interacts. For a system ofn-qubits the quantum chemistry Hamiltonian can be specified withO(n4)amount of
+information. The goal of many modern quantum chemistry algorithms is to figure out how to get the Hamiltonian into
+the quantum circuit for less thanO(n4)costly quantum operations by a combination of classical compression and
+circuit design.
+Our goal will be to specify the Hamiltonian in Eq.(45) in the lowest space-time volume possible using an LCU where
+the unitaries are the rank-1 factorizations of the integral tensor. Almost all modern second quantized simulation
+techniques leverage compression of the two-body component of Eq.(45) which corresponds to writing the four tensor
+h(2)pqrs as a tensor network and use a rank-1 unitary representation to build the full operator. In this benchmark we fix
+the tensor network to be that of Ref. [11] and require the user to find optimal dimensions of the tensor network that
+achieve a good approximation ofh(2)pqrs and h(1)pq along with a small spacetime volume for the overall circuit. We cannot
+ask for the entire compilation of Ref. [11] as that requires a verification framework beyond kickmix, but we will use a
+proxy to ensure that users cannot artificially change the parameters to lower the space-time cost of the table lookups
+over the other components of the algorithm. The combination of classical optimization of the tensor network and
+how that leads to an efficient quantum circuit is representative of the type of large-scale computational workflow that
+informs the optimal circuit design.
+2. Reference implementation
+The block-encoding implementation is factored into self-contained components defined in this section. The user
+specifically optimizes over the following components that dominate the overall cost of the algorithm.
+• section IIIC3, eq. (62): The user explicitly optimizes the DFTHC factorization to Frobenius error≤ϵ DFTHC =
+20mHa, where they have freedom to choose the rank components(R,B,C ), the vectorsu(ρ)b , and the weightsw(ρc)b
+and W (ρc) (the symmetry shift(S,β 1)is fixed to the provided baseline’s), and then minimize cost parameters of
+block-encoding one-norm and SOS gap
+√
+Egap(2Λ−E gap).
+–We provide the variational upper bound on ground state energy.
+–We provide the raw one- and two-electron integrals.
+–We provide a reference factorization that does not necessarily satisfy the accuracy requirements.
+• section IIIC4, eq. (72): The Majorana rotation angles boolean oracleAnglesj is an explicit quantum circuit that
+the user optimizes over. The user decides how each batch of theN− 1rotation angles is streamed in thejth oracle
+call.
+– We provide a reference quantum circuit compilation of these boolean oracles based on QROM [6] quantum
+lookup table.
+15
+–We provide a reference address to bit-string map used to verify the output of the boolean oracles.
+• section IIIC5, eq. (64): The user explicitly optimizes the map from rotation angles to Majorana operators by
+providing a tree specifying the connectivity of Givens rotations.
+–We provide a reference tree.
+The artifacts are input into the verification procedure of section IIIC6 to verify a Frobenius error of at mostϵDFTHC.
+The following are provided to the user as black-boxes with heuristic cost functions. These are provided as black-boxes
+as there are too many possible implementations, and most of them would be difficult to verify. In particular, although
+many can be decomposed into Boolean oracle calls, these are highly sensitive to the particular implementation and are
+anyway subdominant in cost.
+• State preparation unitaryInner, heuristic cost function for Toffoli-Qubit spacetime tradeoff (“Inner Prep” rows of
+Table 3 in Ref. [11]).
+• Multiplexed state preparation unitaryOuter, heuristic cost function for Toffoli-Qubit spacetime tradeoff (“Outer
+Prep” rows of Table 3 in Ref. [11]).
+•Majorana Givens rotation circuit, heuristic cost function for Toffolis section A1.
+The overall score will be
+S=λ eff×T tot×Q tot, λ eff =
+√
+Egap(2Λ−E gap),(44)
+where Ttot is the simulated Toffoli count of theAnglesk circuits over one forward and one reverse traversal plus
+the heuristic Toffoli costs ofOuter,Inner, and theN− 1Givens rotations, andQtot is the number of persistent
+qubits (the state-preparation registers and theJb rot angle-word registers) plus the largest temporary workspace among
+Outer,Inner, and the Anglesk circuits, which run sequentially and share it. EachAnglesk circuit may use at
+most128qubits in total; this cap keeps the interesting part of optimizingInnerdominant, and in our previous
+resource estimates gives a balanced physical cost, e.g. 200k physical qubits and< 1day. A submission is rejected if
+either residual exceedsϵDFTHC, if anyAnglesk circuit uses more than128qubits, or if the raw LCU normalization
+or the SOS gap fail the strict floorsΛ> 49.0Ha and Egap > 3.914898Ha (see section IIIC6); these floors rule out
+degenerate factorizations that shrink the normalization or the gap to gameλeff, which itself has no separate floor.
+Next we provide detailed descriptions for the numerical optimization and verification steps.
+3. Optimization of DFTHC factorization
+Let[N] :={0,...,N−1}and consider the real spin-free electronic-structure Hamiltonian
+H=
+∑
+p,q∈[N]
+h(1)pqEpq + 12 ∑p,q,r,s∈[N]h(2)pqrsEpqErs, E pq := ∑σ∈{0,1}a†pσaqσ.(45)
+For our work we will search for representations of the Hamiltonian factorized into a form amenable to efficient circuit
+implementation. As such we can consider a related class of Hamiltonians that is spectrally equivalent in anη-particle
+manifold of Hilbert space
+H=
+∑
+p,q∈[N]
+(
+h(1)pq − η2Spq +β 1δpq)Epq + 12 ∑p,q,r,s∈[N](h(2)pqrs + 12 (S⊗I N +IN⊗S) pqrs)EpqErs + (−ηβ1)I 4N,(46)
+for a symmetric matrixS and scalarβ1. In the competition, the symmetry shift(S,β 1)is not an optimization variable:
+the verifier scores every submission with the shift of the provided baseline factorization, and any submitted shift is
+ignored. The inputs to the factorization problem are
+(
+h(1),h (2),R,B,C,H sym,ϵ DFTHC
+)
+, ϵ DFTHC := 20 mHa = 2.0×10−2 Ha,(47)
+whereHsym is the particle-number (η) in which the ground-state energy is to be estimated. The integersR, B, andC
+respectively specify the number of rank components, the number of single-particle vectors per component, and the
+number of coefficient copies per component of the following tensor network description of the two-electron integrals
+h(2)pqrs.
+16
+For everyρ∈[R]andb∈[B], introduce a real unit vector
+u(ρ)b ∈R N, ‖‖u(ρ)b ‖‖2 = 1,(48)
+and, for every(ρ,c)∈[R]×[C], introduce real coefficientsw (ρc)b and an identity offsetW(ρc). Define
+X(ρc)pq := ∑
+b∈[B]
+w(ρc)b u(ρ)b,pu(ρ)b,q, ~h(2)pqrs := ∑
+ρ∈[R]
+∑
+c∈[C]
+X(ρc)pq X(ρc)rs .(49)
+The corresponding DFTHC Hamiltonian is
+HDFTHC(Θ) :=
+∑
+p,q
+h(1)′pq Epq + 12∑ρ,c
+(
+W (ρc)I4N +∑
+p,q
+X(ρc)pq Epq
+)2
+−
+(
+ηβ1 + 12∑ρ,c⏐⏐W (ρc)⏐⏐2
+)
+I4N,(50)
+Θ :=
+{
+u(ρ)b ,w (ρc)b ,W (ρc),h (1)sym,β 1
+}
+ρ,b,c
+(51)
+whereh (1)sym is a real symmetric matrix andβ1 is a real-valued scalar. The free one-body tensor is chosen as
+h(1)′pq :=h (1)pq − η2Spq +β 1δpq−∑ρ,c W (ρc)X(ρc)pq .(52)
+Consequently, expanding Eq. (50) gives
+HDFTHC(Θ) =−ηβ 1I4N +
+∑
+p,q
+(
+h(1)pq − η2Spq +β 1δpq)Epq + 12 ∑p,q,r,s~h(2)pqrsEpqErs.(53)
+Thus the one-body interaction is represented exactly for everyΘ; only the two-body tensor is approximated. Its error
+is measured by
+ϵfro(Θ) :=
+‖‖‖h(2)−~h(2)(Θ)‖‖‖
+F
+=
+( ∑
+p,q,r,s
+⏐⏐⏐⏐h(2)pqrs−~h(2)pqrs(Θ) + 12 (S⊗I N +IN⊗S) pqrs⏐⏐⏐⏐2)1/2.(54)
+We will also check if the residual of the1-electron component of the Hamiltonian is supplied correctly.
+To define the quantum-cost objective, let
+w(ρc)B :=W (ρc) + ∑
+b∈[B]
+w(ρc)b .(55)
+The LCU one-norm, equivalently the normalization of the DFTHC Hamiltonian block encoding, is
+Λ(Θ) :=
+‖‖h(1)′‖‖∗ + 14∑ρ,c
+
+⏐⏐w(ρc)B ⏐⏐ + ∑
+b∈[B]
+⏐⏐w(ρc)b ⏐⏐
+
+
+2
+,(56)
+where∥·∥ ∗ denotes the Schatten one-norm. The associated sum-of-squares energy shift is
+ESOS(Θ) :=−ηβ 1−
+(‖‖h(1)′‖‖∗−Trh (1)′)− 12∑ρ,c⏐⏐W (ρc)⏐⏐2,(57)
+so thatH DFTHC(Θ)−E SOS(Θ)I⪰0. Define
+Egs(Θ) :=λ min
+(
+HDFTHC(Θ)
+⏐⏐
+Hsym
+)
+,(58)
+Egap(Θ) :=E gs(Θ)−E SOS(Θ),0≤E gap(Θ)≤2Λ(Θ).(59)
+Writing
+δgap(Θ) := Egap(Θ)Λ(Θ) , g amp(Θ) :=√δgap(Θ)(2−δ gap(Θ)),(60)
+17
+the spectrum-amplified block-encoding one-norm is the product
+λeff(Θ) := Λ(Θ)gamp(Θ) =
+√
+Egap(Θ) (2Λ(Θ)−E gap(Θ)).(61)
+For fixed(R,B,C), a good DFTHC factorization is therefore any solution of the constrained optimization problem
+Θ⋆∈argmin
+Θ
+λeff(Θ)
+subject toϵ fro(Θ)<ϵ DFTHC = 20 mHa,‖‖u(ρ)b ‖‖2 = 1for allρ∈[R], b∈[B]. (62)
+The output consists ofΘ⋆, the exactly absorbed one-body tensorh(1)′(Θ⋆), and the diagnosticsϵfro,Λ, ESOS, Egap,
+and λeff. If different choices of( R,B,C )or different block-encoding circuit implementations are compared, the
+implementation-aware outer objective is
+CBE(R,B,C)λ eff(Θ⋆),(63)
+whereC BE is the cost of one query to the selected DFTHC block-encoding circuit.
+4. Verification of circuit for Boolean oracle
+This is assumed to be a collection ofK kickmix circuits that implement the boolean oracleAnglesk. Any ancilla
+qubits used are assumed to start in, and are returned to, the|0⟩ state. Each Anglesk oracle must declare named
+registers ‘selection’ and ‘word_0’, ..., ‘word_J-1’. The selection register should be of size⌈log2(N +RB)⌉ qubits and
+take on valuesa<N +RB in binary. The firstN select the one-body components of the Hamiltonian while the last
+RB components select the two-particle part. Each ‘word_j’ register isβ qubits wide and holds one rotation angle as a
+fixed point number in binary; the verifier readsβ and J from these registers. The fixed point number is between[0, 2)
+and thus has a single integer bit andβ− 1mantissa bits. All other qubits are workspace that must start and end in
+|0⟩, and Z_POW instructions are not allowed, so every phase is a multiple ofπ. The family of oracles is simulated for
+every input in the ‘selection’ register, once forward and once in reverse, with64shots per address, and we verify the
+construction of the binary representation of angles for Givens rotations. The user has freedom to specify how the
+boolean function should work, bits of precision, ordering of the Tree for Givens rotations, and tensor factorizations of
+the Hamiltonian. All should be optimized to minimize the cost function heuristic designed to minimize the spacetime
+footprint of the overall block encoding algorithm.
+5. Verification of Majorana rotations
+Black-box routine:u←TreeMajoranaCoefficients(T, ⃗θ).
+Input:A rooted, child-ordered tree T on N vertices and an edge-angle vector ⃗θ∈R N−1, listed in the
+parent-before-child order encoded byT.
+Output:The coefficient vectoru( ⃗θ)∈R N, independent ofx∈{ 0, 1}, definingγu(⃗θ),x :=∑vuv(⃗θ)γv,x and
+satisfyingUT (⃗θ)†γ0,xUT (⃗θ) =γ u(⃗θ),x.
+Classical algorithm runtime:O(N)floating-point operations and O(N)output storage; see the algorithm
+below.
+(64)
+LetT = (V,E )be a tree onV ={0,...,N− 1}, rooted at vertex0. For each orbitalv, letγv,x, x∈{ 0, 1}, denote its
+two Majorana operators, with
+{γv,x,γw,y}= 2δ vwδxyI.
+18
+Orient every edge away from the root, fix an order on the children of each vertex, and enumerate the edges in any
+parent-before-child order
+ek = (pk→q k), k= 1,...,N−1,
+meaning that the edge entering a nonroot vertex precedes every edge leaving that vertex. Associate angleθk with ek.
+The sibling order is part of the specification because rotations on incident edges need not commute.
+For an oriented edge(v→w), define the fermionic Givens rotation
+Gvw(θ) := exp
+[θ
+2
+(
+γv,0γw,0 +γv,1γw,1
+)]
+,
+with convention
+Gvw(θ)†
+(γv,x
+γw,x
+)
+Gvw(θ) =
+( cosθsinθ
+−sinθcosθ
+)(γv,x
+γw,x
+)
+, x∈{0,1}.
+Set
+UT (⃗θ) :=
+N−1∏
+k=1
+Gpkqk(θk),with factors ordered from left to right in increasingk.
+Then there is a real unit vectoru(⃗θ)∈R N such that, simultaneously forx= 0,1,
+UT (⃗θ)†γ0,xUT (⃗θ) =
+N−1∑
+v=0
+uv(⃗θ)γv,x =:γ u(⃗θ),x,
+N−1∑
+v=0
+u2v = 1.(65)
+Thus a coherent implementation usesN− 1angle registers, one for each edge, and applies the corresponding controlled
+Givens rotations in the specified order.
+a. Classical coefficient algorithm.The coefficients in Eq. (65) are computed by applying the same planar rotations
+toe 0:
+Input:(p k,qk,θk)N−1k=1 .
+Initialize:u←(1,0,...,0).
+Fork= 1,...,N−1 :c←cosθ k, s←sinθ k,
+a←u pk, b←u qk,
+upk←ca−sb, u qk←sa+cb.
+Return:u.
+(66)
+The ordering condition implies thatqk has not been touched before its parent edge is processed, souqk = 0at step k.
+Hence the update simplifies to
+uqk←u pk sinθk, u pk←u pk cosθk.(67)
+Each of theN− 1edges is processed once. The algorithm therefore usesO(N)floating-point operations and O(N)
+output storage; after evaluating the trigonometric functions, Eq.(67) uses exactly2(N− 1)multiplications. Each
+update is orthogonal, so it preserves∥u∥2 = 1.
+Equivalently, if the ordered children ofvarew1,...,w dv andA v is the coefficient arriving atv, then
+A0 = 1, A wj =A v
+
+∏
+ℓ<j
+cosθvwℓ
+
+ sinθvwj, u v =A v
+dv∏
+ℓ=1
+cosθvwℓ.(68)
+For the path0→1→···→N−1, this reduces to the usual sequential line construction.
+19
+6. Verification of DFTHC SOSSA block-encoding
+Throughout,[ M] :={0,...,M− 1}. For a batch size1≤J≤N− 1, defineK :=⌈(N− 1)/J⌉. For optimization,
+the DFTHC block-encoding circuit is specified by a fixed treeT , the black-box unitariesOuterandInner, and a
+family of Boolean angle oracles{Anglek}K−1k=0 . The first two are supplied as black boxes and enter the objective only
+through heuristic Toffoli costs. Only the angle-oracle circuits are synthesized and optimized explicitly. All generator
+labels, register maps, spin controls, Majorana signs, and reflection details are hidden from the user-facing interface and
+deferred to section A.
+LetT = (V,E )be a rooted, child-ordered tree onV = [N]. Its oriented edges are listed aset = (pt→q t), t∈ [N− 1],
+in parent-before-child order. For every opaque unit-vector addressa, let⃗θa = (θa,0,...,θ a,N−2)be the edge angles
+represented by the family{Anglek}K−1k=0 and define
+ua := TreeMajoranaCoefficients(T, ⃗θa)∈R N, U T,σ (⃗θa)†γ0σxUT,σ (⃗θa) = ∑
+p∈[N]
+ua,pγpσx.
+The same real unit vector is obtained for bothx∈{ 0, 1} and either spinσ. The classical map usesO(N)floating-point
+operations andO(N)working storage. Its explicit recursion is given in eq. (A3).
+Let ℓ∈ [L], whereL =RC, be an opaque label for a two-electron square. TheL squares are internally grouped intoR
+sets ofC copies, with the sameB vectors shared inside each group; this bookkeeping is hidden from the user-facing
+problem. Forb∈ [B], writewℓb∈R , and letuℓb denote the addressed vector returned byTreeMajoranaCoefficients.
+Every one-body eigenvector used below is represented in the same way. LetWℓ be the identity offset and define
+wℓB =W ℓ +∑b∈[B]wℓb. The implemented tensors are specified classically by
+X(ℓ)pq := ∑
+b∈[B]
+wℓbuℓb,puℓb,q, ~h(2)pqrs := ∑
+ℓ∈[L]
+X(ℓ)pqX(ℓ)rs ,
+h(1)′pq :=h (1)pq − η2Spq +β 1δpq− ∑ℓ∈[L]WℓX(ℓ)pq. (69)
+Thus the one-electron tensor is absorbed exactly (though still verified); only~h(2) approximates the input tensorh(2).
+Black-box input and block-encoding output
+Inputs.Integers N,R,B,C ; target tensorsh(1) and h(2); weights{wℓb,Wℓ}; the rooted, child-ordered treeT ; an
+angle precisionb rot; a batch size1≤J≤N−1; and the following unitaries.
+Outer|0⟩=
+∑
+x∈X
+αx|x⟩,Cost T(Outer) :=C out.(70)
+Here x is an opaque outer address. Its amplitudes encode the relative normalizations of the one- and two-electron
+square-root generators.
+Inner:|x⟩|0⟩↦−→|x⟩
+∑
+y∈Yx
+βx,y|y⟩,Cost T(Inner) :=C in.(71)
+Here y is an opaque inner address. It selects the identity or rotated Majorana contribution and includes any
+required sign, phase, success, and garbage registers.
+Fork∈[K], let
+ϑ[k]a :=(ϑa,kJ,...,ϑ a,kJ+J−1),
+∆ϑ[k]a :=
+{
+ϑ[0]a , k= 0,
+ϑ[k]a ⊕ϑ [k−1]a , k>0,
+where ϑa,t∈{ 0, 1}brot encodes θa,t/π and is zero fort≥N− 1. The batch label is hard-wired into the oracle:
+there is no coherentkregister, and the only input/control is the vector addressa,
+Anglek :|a⟩|z⟩↦−→|a⟩|z⊕∆ϑ [k]a ⟩,Cost T(Anglek) :=C ang,k(J), k∈[K].(72)
+20
+XOR is componentwise over theJ angle words. Thus, fork> 0, a register holdingϑ[k−1]a is changed directly into
+ϑ[k]a , eliminating a separate inter-batch uncomputation. One forward traversal costsCpassang (J) :=∑k∈[K]Cang,k(J).
+Output.A unitaryU BE and signal projectorΠsatisfying
+ΠUBEΠ =
+(HDFTHC−E SOSI
+Λ −I
+)
+Π.(73)
+The tree and these three oracle interfaces completely specify the implemented one- and two-electron block encoding.
+Each angle oracle is self-inverse, and each black-box inverse has the same assigned Toffoli cost.
+Optimization scope. Outer and Inner are never opened or re-synthesized: their contributions are represented
+only by heuristic valuesCout andC in. The treeTis fixed classical structure, andTreeMajoranaCoefficientsis a
+deterministic classical evaluation map. The reversible implementations and scheduling of{Anglek}K−1k=0 are the
+only circuit-level optimization variables; their explicit costs areCang,k(J), orCpassang (J)for one complete traversal.
+a. Streamed, batched, or parallel angles.Starting from z = 0, Angle0 loads batch0; after batchk− 1is consumed,
+Anglek overwrites it in place with batchk. The reverse traversal walks through the batches backward and ends with
+Angle0, which clearsz. HenceJ = 1streams one angle, intermediateJ reuses J angle-word registers, andJ =N− 1
+loads all angles at once. The choice ofJchanges ancillas, latency, and cost, but not the represented Hamiltonian.
+7. Verification and scoring
+For FeMo-co (N = 76, η = 113), the verifier fixesS =S0 and β1 =β1,0 to the supplied baseline. Participants may
+optimize the factorization ranks and factors, angle precision, and angle-loading circuits.
+The verifier simulates every valid vector address, with 64 measurement samples per address, checking consistent angle
+words, unchanged addresses, clean workspace, and corrected phases during forward and reverse traversal. Each angle
+circuit is limited to 128 qubits. The recovered words determine the vectors used in all subsequent calculations.
+Using these vectors, the verifier constructsX(ρc) and h(1)′ as defined above. It matches the decoded one-body vectors
+to the eigenvectors ofh(1)′ and reconstructs~h(1)′ using the corresponding eigenvalues. Acceptance requires
+ϵ1 =∥~h(1)′−h (1)′∥F≤0.020 Ha,(74)
+ϵ2 =
+‖‖‖‖‖∑ρ,c X(ρc)⊗X (ρc)−h (2)−T(S 0)‖‖‖‖‖F≤0.020 Ha,(75)
+whereT(S 0) = (S0⊗I+I⊗S 0)/2.
+The verifier recomputesΛandE SOS and uses
+Egap =E upper−E SOS,(76)
+λeff =
+√
+Egap(2Λ−E gap),(77)
+with the fixed, core-inclusive referenceEupper =−22140.27335 Ha. All metrics must be finite, with0<E gap < 2Λ,
+Egap >3.914898 Ha, andΛ>49.0 Ha.
+Accepted submissions receive the score
+S=λ effTtotQtot,(78)
+using simulated angle-circuit costs and the prescribed state-preparation and Givens-rotation cost model.Qtot includes
+the full modeled workspace and is not capped at 128. Failed checks give infinite score; values are not clamped to the
+floors.
+The original baseline passes with unchanged score. These checks constrain coefficient errors and resource costs; they
+do not certify a 20 mHa many-electron energy error.
+21
+Classical quantities exposed to the user
+Before evaluating either quantity below, the user decodes the angle words and appliesTreeMajoranaCoefficients(T, ⃗θa)
+to each addressed vector. For theN +RB distinct vectors used by the standard DFTHC organization, this preprocessing
+costs O((N +RB)N)floating-point operations and can be streamed withO(N)working storage. It is lower order
+than the tensor contractions below.
+a. Two-electron Frobenius error.The implemented error is
+ϵfro :=
+‖‖‖h(2)−~h(2)‖‖‖
+F
+=
+
+ ∑
+p,q,r,s
+(
+h(2)pqrs−∑
+ℓ
+X(ℓ)pqX(ℓ)rs
+)2
+
+1/2
+.(79)
+It need not be evaluated by explicitly storing~h(2). LetH 2∈R N 2×N 2 be the pair-index flattening(H2)(pq),(rs) =h(2)pqrs
+and letxℓ = vec(X(ℓ)). Then
+ϵ2fro =‖‖‖h(2)‖‖‖2F−2∑ℓ xTℓ H2xℓ +∑ℓ,m(xTℓxm)2.(80)
+With ordinary dense floating-point contractions this costs
+O
+(
+N4 +LBN 2 +LN 4 +L 2N2) (81)
+operations, with dominant contraction costO(LN4) = O(RCN 4). Under the circuit-design scalingB,C = Θ(N)
+and R = ~O(1), the exponent is5:ϵfro is computable in~O(N5)dense floating-point operations (orO(N5)when R is
+constant).
+b. 1-electron Frobenius norm errorWe also check the loss with respect to the correct1-electron coefficients. This
+is computed as a function of the tensors supplied by the userS, Wρ,c, Xρcpq. This is to ensure that the QROM
+output provided for the 1-electron component of the Hamiltonian is sufficiently low error to simulate the trueHDFTHC
+Hamiltonian. Recall the firstN vectors output from the collection of AngleK QROMs correspond to the eigenvectors of
+h(1)′pq =h (1)pq − η2Spq +β 1δpq− ∑ℓ∈[L]WℓX(ℓ)pq (82)
+whereX(ℓ)pq is computed from the output of the lastRB vectors of the AngleK QROMs. Ultimately we want to check if
+ϵ1,fro =||h (1)pq − ˜h(1)pq||(83)
+is small and below the given threshold of 20 mHa. To do this we first constructh(1)′ and diagonalize to get eigenvalues.
+Next we take the eigenvectors exported from QROM and align them with the eigenvectors used for diagonalization in
+the previous step. We then reconstruct
+˜h(1)′ =∑
+j
+λj˜vj˜v†j (84)
+where λj are the ideal eigenvalues and˜vj are the vectors read from QROM where elements are represented inβ bits of
+precision. Finally we recover˜h(1) by
+˜h(1)pq = ˜h(1)′pq + η2Spq−β 1δpq +∑ρ,c Wρ,c ˜Xρcpq (85)
+which enables theϵ1,fro computation.
+c. Block-encoding normalization.Diagonalize the exactly corrected one-body matrix as
+h(1)′ =∑
+j
+w+,ju+,juT+,j−∑
+j
+w−,ju−,juT−,j, w ±,j≥0.(86)
+22
+The normalization is the sum of its one- and two-electron contributions:
+Λ =
+∑
+j
+(
+w+,j +w−,j
+)
+/bracehtipupleft /bracehtipdownright/bracehtipdownleft /bracehtipupright
+Λ1 =∥h (1)′∥∗
++ 14 ∑ℓ∈[L]
+
+|wℓB|+ ∑
+b∈[B]
+|wℓb|
+
+
+2
+/bracehtipupleft /bracehtipdownright/bracehtipdownleft /bracehtipupright
+Λ2
+. (87)
+Equations (79) and (87) are the only Hamiltonian-quality quantities required by the user-facing optimizer.
+IV. OUTLOOK
+The benchmarks in this paper evaluate flat gate streams using logical qubit and Toffoli counts. While this setup gives
+AI agents a fast inner loop for subroutine optimization, moving toward end-to-end fault-tolerant compilation suggests
+two main directions:
+1. Compiling directly to a target QEC architecture: Logical qubit and Toffoli counts are coarse proxies for physical
+hardware cost. In practice, hardware capabilities dictate the choice of quantum error-correcting (QEC) code.
+That code choice then determines how the architecture implements logical gates and what overheads arise from
+magic-state distillation, qubit routing, and reaction time [7, 10, 12, 29, 30]. Future benchmarks can keepkickmix
+simulation to check logical correctness while scoring submissions with a QEC cost model for a target architecture.
+AI agents can then co-optimize the logical arithmetic, qubit layout, and gate schedule to minimize physical
+qubits and runtime.
+2. Machine-checkable proofs of circuit correctness: Classical simulation applies only to kickmix circuits, and a
+flat .kmb gate stream only tests a single problem size. Many quantum subroutines, such as state preparation,
+quantum signal processing, and fermionic rotations, create superpositions internally and cannot be checked by a
+kickmix simulator. When human researchers optimize these subroutines, they design parameterized constructions
+for any input sizen and prove their correctness and cost bounds symbolically. As AI reasoning models and proof
+assistants such as Lean [31] mature, submissions could pair a circuit generator with a proof of its correctness
+and cost. Because a proof assistant checks algebraic identities rather than simulating basis states, it can certify
+arbitrary quantum unitaries regardless of Hilbert space dimension. This shift would let AI agents optimize
+general quantum algorithms end to end and discover parameterized constructions that hold across all problem
+sizes.
+Together, fast verifiers, architecture-aware cost models, and formal proofs can democratize fault-tolerant compilation,
+opening quantum algorithm design to researchers and engineers across all fields.
+ACKNOWLEDGMENTS
+While we were finalizing this manuscript and preparing the competition, Ref. [32] appeared on the arXiv. That work
+also builds on thekickmix model of Ref. [13] to optimize fault-tolerant quantum subroutines with AI agents, and studies
+many of the same benchmark problems, including Reed-Solomon syndrome decoding for DQI, Coulomb-potential
+evaluation, and quantum lookup tables for electronic structure. Although there is significant overlap between the two
+studies, this work was developed independently and in parallel. We note that we also spoke about accelerating these
+benchmarks two weeks prior in a recorded talk at KITP [33]. Our internal results show that all three benchmarks can
+be further improved beyond the circuits reported to date, so the competition remains open and interesting. Taken
+together, the strong results in Ref. [32] underscore the effectiveness of pairing fast classical verification with AI-driven
+search, highlighting both the importance of this approach and the relevance of the competition.
+23
+[1] A. Kissinger and J. van de Wetering, Reducing the number of non-Clifford gates in quantum circuits, Phys. Rev. A102,
+022406 (2020).
+[2] M. Xu, Z. Li, O. Padon, S. Lin, J. Pointing, A. Hirth, H. Ma, J. Palsberg, A. Aiken, U. A. Acar, and Z. Jia, Quartz:
+superoptimization of quantum circuits, inProceedings of the 43rd ACM SIGPLAN International Conference on Programming
+Language Design and Implementation(ACM, 2022) pp. 625–640.
+[3] F. J. R. Ruiz, T. Laakkonen, J. Bausch, M. Balog, M. Barekatain, F. J. H. Heras, A. Novikov, N. Fitzpatrick, B. Romera-
+Paredes, J. van de Wetering, A. Fawzi, K. Meichanetzidis, and P. Kohli, Quantum circuit optimization with AlphaTensor,
+Nature Machine Intelligence7, 374 (2025).
+[4] A. Novikov, N. V˜ u, M. Eisenberger, E. Dupont, P.-S. Huang, A. Z. Wagner, S. Shirobokov, B. Kozlovskii, F. J. R. Ruiz,
+A. Mehrabian, M. P. Kumar, A. See, S. Chaudhuri, G. Holland, A. Davies, S. Nowozin, P. Kohli, and M. Balog, AlphaEvolve:
+A coding agent for scientific and algorithmic discovery (2025), arXiv:2506.13131 [cs.AI].
+[5] D. Janzing, P. Wocjan, and T. Beth, “non-identity-check” is QMA-complete, International Journal of Quantum Information
+03, 463 (2005).
+[6] R. Babbush, C. Gidney, D. Berry, N. Wiebe, J. McClean, A. Paler, A. Fowler, and H. Neven, Encoding Electronic Spectra
+in Quantum Circuits with Linear T Complexity, Physical Review X8, 041015 (2018).
+[7] C. Gidney and M. Ekerå, How to factor 2048 bit RSA integers in 8 hours using 20 million noisy qubits, Quantum5, 433
+(2021).
+[8] J. Lee, D. W. Berry, C. Gidney, W. J. Huggins, J. R. McClean, N. Wiebe, and R. Babbush, Even More Efficient Quantum
+Computations of Chemistry Through Tensor Hypercontraction, PRX Quantum2, 030305 (2021).
+[9] N. C. Rubin, D. W. Berry, A. Kononov, F. D. Malone, T. Khattar, A. White, J. Lee, H. Neven, R. Babbush, and A. D.
+Baczewski, Quantum computation of stopping power for inertial fusion target design, Proceedings of the National Academy
+of Sciences121, e2317772121 (2024).
+[10] C. Gidney, How to factor 2048 bit RSA integers with less than a million noisy qubits (2025).
+[11] G. H. Low, R. King, D. W. Berry, Q. Han, A. E. DePrince, III, A. F. White, R. Babbush, R. D. Somma, and N. C. Rubin,
+Fast quantum simulation of electronic structure by spectrum amplification, Phys. Rev. X15, 041016 (2025).
+[12] T. Khattar, N. Shutty, C. Gidney, A. Zalcman, N. Yosri, D. Maslov, R. Babbush, and S. P. Jordan, Verifiable quantum
+advantage via optimized DQI circuits (2025), arXiv:2510.10967 [quant-ph].
+[13] R. Babbush, A. Zalcman, C. Gidney, M. Broughton, T. Khattar, H. Neven, T. Bergamaschi, J. Drake, and D. Boneh,
+Securing elliptic curve cryptocurrencies against quantum vulnerabilities: Resource estimates and mitigations (2026).
+[14] J. Long, T. Pender, Z. Huang, M. B. Santos, S. K. Singh, B. Naskręcki, BitWonka, P.-L. Dallaire-Demers, F. Giannicola,
+R. M. L. Paschoarelli, O. Freuler, J. C.-H. Lee, V. Gnuchev, G. Kannappan, J. Boyer, X. Butler, A. Balasubramani,
+J. Newman, B. Dereje, A. Hertlein, R. Kodra, L. Levy, S. Patel, J. Rose, M. Zweil, O. Wisdom, T. El-Eter, E. Lee, M. Dong,
+A. Li, A. Joseph, D. Nguyen, G. Naik, G. Anant, S. Deb, and J. Drake, Efficient record-and-replay arithmetic for quantum
+elliptic-curve point addition (2026).
+[15] M. P. Harrigan, T. Khattar, C. Yuan, A. Peduri, N. Yosri, F. D. Malone, R. Babbush, and N. C. Rubin, Expressing and
+analyzing quantum algorithms with Qualtran (2024), arXiv:2409.04643 [quant-ph].
+[16] S. P. Jordan, N. Shutty, M. Wootters, A. Zalcman, A. Schmidhuber, R. King, S. V. Isakov, T. Khattar, and R. Babbush,
+Optimization by decoded quantum interferometry, Nature646, 831 (2025), arXiv:2408.08292 [quant-ph].
+[17] C. Gidney, Halving the cost of quantum addition, Quantum2, 74 (2018).
+[18] A. Fiat and A. Shamir, How to prove yourself: Practical solutions to identification and signature problems, inAdvances in
+Cryptology — CRYPTO’ 86(Springer Berlin Heidelberg, 1987) pp. 186–194.
+[19] C. Gidney, Stim: a fast stabilizer circuit simulator, Quantum5, 497 (2021).
+[20] N. C. Jones, J. D. Whitfield, P. L. McMahon, M.-H. Yung, R. Van Meter, A. Aspuru-Guzik, and Y. Yamamoto, Faster
+quantum chemistry simulation on fault-tolerant quantum computers, New Journal of Physics14, 115023 (2012).
+[21] T. Häner, M. Roetteler, and K. M. Svore, Optimizing Quantum Circuits for Arithmetic, arXiv:1805.12445 (2018).
+[22] id Software, Quake III Arena source code:q_math.c(2005), commitdbe4ddb, lines 552–572.
+[23] Y. Su, D. Berry, N. Wiebe, N. Rubin, and R. Babbush, Fault-tolerant quantum simulations of chemistry in first quantization,
+PRX Quantum2, 040332 (2021).
+[24] V. Kliuchnikov, K. Lauter, R. Minko, A. Paetznick, and C. Petit, Shorter quantum circuits via single-qubit gate approxima-
+tion, Quantum7, 1208 (2023), arXiv:2203.10064 [quant-ph].
+[25] V. Guruswami and M. Sudan, List decoding algorithms for certain concatenated codes, inProceedings of the Thirty-Second
+Annual ACM Symposium on Theory of Computing, STOC ’00 (Association for Computing Machinery, New York, NY, USA,
+2000) pp. 181–190.
+[26] M. Naor and B. Pinkas, Oblivious transfer and polynomial evaluation, inProceedings of the Thirty-First Annual ACM
+Symposium on Theory of Computing(ACM, 1999) pp. 245–254.
+[27] D. Bleichenbacher and P. Q. Nguyen, Noisy polynomial interpolation and noisy Chinese remaindering, inAdvances in
+Cryptology—EUROCRYPT 2000, Lecture Notes in Computer Science, Vol. 1807 (Springer, 2000) pp. 53–69.
+[28] J. Proos and C. Zalka, Shor’s discrete logarithm quantum algorithm for elliptic curves (2004), arXiv:quant-ph/0301141
+[quant-ph].
+[29] H. Zhou, C. Duckering, C. Zhao, D. Bluvstein, M. Cain, A. Kubica, S.-T. Wang, and M. D. Lukin, Resource analysis of
+24
+low-overhead transversal architectures for reconfigurable atom arrays (2025).
+[30] M. Cain, Q. Xu, R. King, L. R. B. Picard, H. Levine, M. Endres, J. Preskill, H.-Y. Huang, and D. Bluvstein, Shor’s
+algorithm is possible with as few as 10,000 reconfigurable atomic qubits (2026).
+[31] L. de Moura, S. Kong, J. Avigad, F. van Doorn, and J. von Raumer, The Lean theorem prover (system description), in
+Automated Deduction - CADE-25(Springer International Publishing, 2015) pp. 378–388.
+[32] A. Gu, A. H. Kemeny, S. F. Yelin, and M. D. Lukin, Discovering state-of-the-art quantum circuits with large language
+models (2026), arXiv:2610.22367 [quant-ph].
+[33] R. Babbush, Accelerating the field of quantum algorithms with AI, Recorded talk at the KITP Conference: Artificial
+Intelligence at the Quantum Frontier (2026).
+Appendix A: DFTHC block encoding circuits
+This appendix expands the tree rotation and the opaque addresses in section IIIC6 into the labels and select logic
+used by the DFTHC block encoding. None of these labels is an optimization variable in the user-facing problem.
+1. Tree Majorana coefficients and basis rotation
+Write the ordered edges ofTase t = (pt→q t),t∈[N−1]. For fixed spinσ, define the edge Givens rotation
+G(σ)pq (θ) := exp
+[θ
+2 (γpσ0γqσ0 +γpσ1γqσ1)
+]
+,(A1)
+and let
+UT,σ (⃗θ) :=
+N−2∏
+t=0
+G(σ)ptqt(θt),(A2)
+with factors written from left to right in increasingt. The classical mapTreeMajoranaCoefficients of section IIIC6 is
+computed by
+u←(1,0,...,0),
+(upt,uqt)←
+(
+cosθtupt−sinθ tuqt,sinθ tupt + cosθtuqt
+)
+, t= 0,...,N−2. (A3)
+It returns a unit vector and satisfies, simultaneously forx= 0,1,
+UT,σ (⃗θ)†γ0σxUT,σ (⃗θ) = ∑
+p∈[N]
+upγpσx.(A4)
+Each of theN− 1edges is processed once, givingO(N)floating-point operations andO(N)output storage. Coherently,
+Angle0 loads the first batch of angle words and each subsequentAnglek updates that register in place by the XOR
+difference between adjacent batches. The corresponding controlled edge rotations are applied in the same tree order.
+The fermion-to-qubit representation changes only the fixed Clifford conjugations used to realize each edge rotation; it
+does not changeTreeMajoranaCoefficients,Outer,Inner, or the angle table.
+The quantum circuit implementing thetth Givens rotation is abt-bit controlled adder. The Toffoli count of each adder
+is assumed to be2bt−1.
+2. Sum-of-squares generators
+Let r∈ [R], c∈ [C], b∈ [B], spinσ∈{ 0, 1}, and generator typeG∈{ D1, Q1,SF}. For a real unit vectoru, define the
+rotated Majorana operator
+γuσx :=
+N−1∑
+p=0
+upγpσx, x∈{0,1}.(A5)
+25
+The one-electron positive and negative eigenspaces and the two-electron squares are represented by
+ODσ1,j :=√w+,j γu+,jσ0 +iγu+,jσ12 ,(A6)
+OQσ1,j :=√w−,j γu−,jσ0−iγu−,jσ12 ,(A7)
+OSF,rc := 1√2
+
+w(rc)B I+ i2 ∑b∈[B] ∑σ∈{0,1}w(rc)b γu(r)b σ0γu(r)b σ1
+
+,(A8)
+wherew (rc)B =W (rc) +∑bw(rc)b . Consequently,
+HDFTHC−E SOSI=
+∑
+j,σ
+(
+O†Dσ1,jODσ1,j +O†Qσ1,jOQσ1,j
+)
++
+∑
+r,c
+O†SF,rcOSF,rc,(A9)
+with
+ESOS =−2
+∑
+j
+w−,j− 12∑r,c|W (rc)|2.(A10)
+The generator normalizations are
+λDσ1,j =√w+,j, λ Qσ1,j =√w−,j, λ SF,rc = 1√2
+(
+|w(rc)B |+ ∑
+b
+|w(rc)b |
+)
+,(A11)
+andΛin Eq. (87) equals one half of the sum of their squared normalizations, including both spins.
+3. Registers, address maps, and select bits
+Let N+ and N− be the numbers of positive and negative eigenvalues ofh(1)′, withN+ +N− =N. A contiguous outer
+addressx o∈[N+RC]may be decoded as
+xo(G,r,c) =
+
+
+
+r, G= D 1, r∈[N +],
+N+ +r, G= Q 1, r∈[N −],
+N+rC+c, G= SF, r∈[R], c∈[C].
+(A12)
+For a two-electron generator,b<B selects a rotated-Majorana coefficient andb =B selects its identity coefficient.
+A vector addressµ∈ [N +RB]labels the N one-body eigenvectors together with theRB vectorsu(r)b . This is the
+concrete address denoted abstractly bya in Eq.(72); the batch labelk is fixed in the identity of the oracleAnglek
+and is not an input register.
+The remaining finite select data comprise: the generator typeG; separate spin controls for the outer one-body sum
+and the inner spin sum in theSF generator; the Majorana indexx∈{ 0, 1} and its relative phase; the sign of each
+coefficient; the identity flagb =B; and the success and garbage bits of the chosen state-preparation routine. These
+bits contain no additional continuous Hamiltonian data.
+4. Circuit order and cost accounting
+At a high level, one generator is block-encoded by
+Outer−→[decode→Inner→spin select]−→{Angle k→Givens batchk} K−1k=0
+−→Majorana select−→{inverse Givens batchk→Angle k}0k=K−1
+−→[Inner†→reflect and square]−→Outer†.
+(A13)
+26
+Equation (A4) maps the fixed root Majorana toγuσx; after this tree rotation the selected Majorana acts on the root
+spin-orbital in the rotated basis. A reflection on the inner signal registers and an inverse application produce the
+squareO†xOx. The outer preparation then forms their weighted sum, yielding Eq. (73).
+For any chosen implementation convention, its Toffoli count can be recorded without exposing the two black boxes as
+CBE =ν outCout +ν inCin +
+K−1∑
+k=0
+νang,kCang,k(J) +C fixed(T,N,J,b rot),(A14)
+where the fixed integersνout,ν in, andνang,k depend only on the selected reflect/uncompute layout. In the standard
+forward/select/reverse schedule, everyAnglek is called once in each direction, so the angle-oracle contribution is
+2Cpassang (J). Only theC ang,k(J)are obtained from explicitly optimized circuits;Cout andC in remain heuristic inputs.
+Appendix B:1/√xbaseline circuits
+1. Polynomial rescaling to coverx norm∈[2,4)
+The range of our interpolation is in[1, 2)but the range forxnorm is in [1,4). This suggests that we need some way to
+relate xnorm∈[2,4) back to our interpolation domain of[1, 2). This is accomplished by noting that we can scale the
+square root. Letu=x norm/2
+1√xnorm = 1√2u = 1√2 1√u (B1)
+and thus forxnorm∈[2,4) we can use scaled coefficients for Eq.(15) and Eq.(16). To be more precise about the
+coefficients we need to use, note that for the upper ranges and by Eq. (B1) we need to implement
+1√xnorm≈ 1√2P(u)(B2)
+where P (u)is the polynomial in Eq.(15) or Eq.(16). To see how we need to modify the coefficients we can plug in
+our expression foru=x norm/2
+1√xnorm = 1√2[a0−a 1(xnorm2 −1) +a 2(xnorm2 −1)2−a 3(xnorm2 −1)3] (B3)
+=a0√2− a12√2(xnorm−2) + a24√2(xnorm−2) 2− a38√2(xnorm−2) 3 (B4)
+it is noted in Ref. [9] that when we scale the square root for some power of two the coefficients need to be scaled as
+1.a 0→a 0/2m/2
+2.a 1→a 1/23m/2
+3.a 2→a 2/25m/2
+4.a 3→a 3/27m/2
+with(x−1)replaced with(x−2 m). Plugging inm= 1we get
+1.a 0/21/2 =⇒a 0/√2
+2.a 1/23/2 =⇒a 1/2√2
+3.a 2/25/2 =⇒a 2/4√2
+4.a 3/27/2 =⇒a 3/8√2
+27
+and( x− 1)becomes( xnorm− 2). A similar scaling is made for theb coefficients. The scaling for the coefficients of the
+b-polynomial follows the same powers of 2 as thea-polynomial. The only thing that changes is the offset subtracted
+fromx. Given the interpolation for the upper range (u∈[1.5,2]), the cubic polynomial is
+Pb(u) =b 0−b 1(u−1.5) +b 2(u−1.5) 2−b 3(u−1.5) 3.
+We want to evaluate1/√x, wherex =u· 2m which meansu = x2m. The true value is 1√x = 1√2m· 1√u and thus we can
+approximate it as
+1√x≈ 12m/2
+[
+b0−b 1
+( x
+2m−1.5
+)
++b 2
+( x
+2m−1.5
+)2
+−b 3
+( x
+2m−1.5
+)3]
+.
+Now, find a common denominator inside the parentheses. Notice that1.5is the same as1.5·2m2m :
+( x
+2m−1.5
+)
+= x−1.5·2 m
+2m .
+Pulling those2m denominators out of the polynomial terms (squaring and cubing them as we go) gives
+1√x≈ 12m/2
+[
+b0− b12m (x−1.5·2 m) + b222m (x−1.5·2 m)2− b323m (x−1.5·2 m)3
+]
+.
+Finally, we distribute the 12m/2 across all the terms
+1√x≈ b02m/2− b123m/2 (x−1.5·2 m) + b225m/2 (x−1.5·2 m)2− b327m/2 (x−1.5·2 m)3.
+The scaling factors applied tob0,b 1,b 2,b 3 follow the same rules as thea-polynomial:
+1.b 0→b 0/2m/2
+2.b 1→b 1/23m/2
+3.b 2→b 2/25m/2
+4.b 3→b 3/27m/2
+And(x−1.5)is replaced with(x−1.5·2 m).
+2. Example calculation of|s⟩
+We illustrate the normalization stage on thenp = 6case (14-bit register x13...x 0) and give the general cost as a
+function ofnp.
+1. Starting with the highest two bits (x13,x 12), we check whether they are00 by applying X gates, computing a
+clean AND into flagf0 in thenp-qubit unary ancilla register, and uncomputing theXgates.
+2. Controlled onf0, we shift the register left by two bits. Rather than introducing temporary ancillas for each swap,
+we split the live bits into their even lane(x0,x 2,...,x 12)and odd lane( x1,x 3,...,x 13)and apply a controlled
+left cyclic rotation by 1 position to each lane. A controlled cyclic rotation on a lane ofL qubits usesL− 1
+controlled-SWAP (CSWAP) gates, each costing 1 Toffoli inkickmix.
+3. Why cyclic rotation leaves clean zeros:Wheneverf0 = 1, the top pair(x13,x 12)is guaranteed to be 00.
+Rotating the odd lane movesx11→x 13,...,x 1→x 3 and wraps the zero inx13 around intox1. Similarly,
+rotating the even lane wraps the zero inx12 around intox0. Thus no data collides and the vacated bottom bits
+are automatically set to0without extra ancilla qubits.
+4. Cascading the shifts (k >0):We repeat this process fork∈{ 1,...,n p− 1}. At each stepk, we check if the
+new top two bits (x2np+1,x 2np) are 00, store the result in flagfk, and conditionally rotate the live even and odd
+bit lanes from bit2kupward left by one position.
+28
+5. Truncated Loop Optimization:Because a shift at stepk only occurs if shifts also occurred at all steps<k ,
+the bottom2k bits ofx were already vacated in previous steps and are guaranteed to be0. Each live lane at
+step k therefore has lengthnp + 1−k and needs onlynp−kCSWAP gates. Fornp = 6, the number ofCSWAP
+gates across the two lanes decreases linearly:
+•Stepk= 0(f 0): two lanes of 7 bits (x13...x 0)→12CSWAPs
+•Stepk= 1(f 1): two lanes of 6 bits (x13...x 2)→10CSWAPs
+•Stepk= 2(f 2): two lanes of 5 bits (x13...x 4)→8CSWAPs
+•Stepk= 3(f 3): two lanes of 4 bits (x13...x 6)→6CSWAPs
+•Stepk= 4(f 4): two lanes of 3 bits (x13...x 8)→4CSWAPs
+•Stepk= 5(f 5): two lanes of 2 bits (x13...x 10)→2CSWAPs
+Summing overk= 0,...,n p−1givesn p(np + 1)CSWAPgates (42atn p = 6,110atn p = 10).
+6. Total Complexity:Adding thenp clean AND gates that compute the flagsfk, forward normalization costs
+np(np + 2)Toffoli-equivalent gates (48at np = 6,120at np = 10). During reverse uncomputation at the end of
+the circuit, the controlled right rotations usenp(np + 1) CSWAP gates while thenp flag ANDs are uncomputed for
+free by measurement. The forward output is the left-aligned registerxnorm (whose top two bits are not00) and
+then p-qubit unary register|f⟩representing the shift counts.
+3. Details on cubic polynomial approximation for1/√w
+The different polynomial coefficients are input data that must be output coherently via QROM. The selection state for
+QROM will be the three most significant bits ofxnorm. Recall ifxnorm =b13b12.b11b10... withb13 = 1then xnorm∈[2,4) .
+We can now work through case-by-case which coefficients to output given we have two polynomials.
+1.b 13 = 1andb 12 = 0implies thatx norm∈[2,3): Output Eq. (15) scaled by something proportional to1/
+√
+2
+2.b 13 = 1andb 12 = 1implies thatx norm∈[3,4): Output Eq. (16) scaled by something proportional to1/
+√
+2
+3.b 13 = 0(implyingb 12 = 1) andb 11 = 0implies thatx norm∈[1,1.5): Output Eq. (15)
+4.b 13 = 0andb 11 = 1implies thatx norm∈[1.5,2): Output Eq. (16)
+The QROM cost for these four entries is2Toffolis because it is not controlled (two AND gates decodeta =¬b13∧b 11
+andt b =b 13∧b 12, followed by a CNOT fanout controlled on{1,b13,ta,tb}into|c 0⟩,|c 1⟩,|c 2⟩,|c 3⟩).
+Next, we describe a series of optimizations for evaluating the polynomial once the coefficients are obtained by the
+QROM read. We need to evaluate these polynomials onxnorm. Written as Eq.(15) and Eq.(16) it would seem we
+need many multiplications and subtractions. The computation can be significantly simplified by rewriting it with
+Horner’s rule as (for the case of the range[1,3/2))
+a0−(x−1){a 1−(x−1)[a 2−a 3(x−1)]}=a 0−a 1(x−1) +a 2(x−1) 2−a 3(x−1) 3.(B5)
+and for the range[3/2,2)we have
+b0−(x−1.5){b 1−(x−1.5)[b 2−b 3(x−1.5)]}=b 0−b 1(x−1.5) +b 2(x−1.5) 2−b 3(x−1.5) 3.(B6)
+The above rewrites of the equation need∆x =x− 1or∆ x =x− 1.5(similarly for our shifted range we need∆x =x− 2
+and∆ x =x− 3). We can derive what shift we need and how it is accomplished by analyzing the polynomialsPa(u)
+andP b(u)across each case:
+1. case 3:xnorm∈[1,1.5) . xnorm =u so we use∆x = (x− 1). Binary implementation:xnorm looks like01.0b10b9...
+(sinceb13 = 0,b 12 = 1,b 11 = 0). Subtracting1just means flipping b12 from 1 to 0. The∆x bits are the fractional
+bits:00.0b 10b9....
+2. case 4:xnorm∈[1.5,2) . Againxnorm =u so we use∆x = (x− 1.5). Binary implementation:xnorm looks like
+01.1b10b9... (since b13 = 0,b 12 = 1,b 11 = 1). Subtracting1 .5means flipping both b12 and b11 to 0. The∆ x
+bits are00.0b 10b9....
+29
+3. case 1:xnorm∈[2,3) . For this casexnorm is too large. We haveu =xnorm/2which sets u∈[1,1.5) . This means
+we are usingPa(u). So,
+(u−1) =
+(xnorm
+2 −1
+)
+= 12 (xnorm−2)(B7)
+which is the same calculation as Eq.(B3). As you can see each of the powers of 2 gets absorbed into a redefinition
+of the coefficientai. Binary implementation:xnorm looks like 10.b11b10... (since b13 = 1,b 12 = 0). Subtracting
+2means flippingb 13 from1to0. The∆xbits are00.b 11b10....
+4. case 2:xnorm∈[3,4) . For this casexnorm is too large so we haveu =xnorm/2which sets u∈[1.5,2) . Following
+the calculation above we get
+u−1.5 =
+(xnorm
+2 −1.5
+)
+= 12 (xnorm−3)(B8)
+which matches the scaling coefficients and∆x for Pb(u)above. Binary implementation: xnorm looks like
+11.b11b10... (since b13 = 1,b 12 = 1). Subtracting3means flipping both b13 and b12 to 0. The∆ x bits are
+00.b11b10....
+We need the bits of∆x for the Horner multiplications while leavingxnorm intact for the Newton-Raphson step. Notice
+that across all four cases, the integer bits (b13 and b12) never appear in∆x, and the lower fractional bits (b10 down to
+b0) from the0.25s place downward always equal the corresponding bits ofxnorm. Only the0.5s-place bit (b11) requires
+controlled logic. We first examine whatb11 should be in∆xfor each of our 4 cases:
+Case 1 ([2,3)): We subtract2. We keep the0.5s place.=⇒Keepb 11.
+Case 2 ([3,4)): We subtract3. We keep the0.5s place.=⇒Keepb 11.
+Case 3 ([1,1.5)): We subtract1.b 11 is already0, so∆x 11 = 0.
+Case 4 ([1.5,2)): We subtract1.5, clearing the0.5s place. Even thoughb11 = 1inx norm,∆x 11 must be0.
+Look at the logic forb11 above. We keepb11 in Cases 1 and 2 (b13 = 1), and clear it in Case 4 (b13 = 0). This means
+∆x11 =b 13∧b 11. Rather than allocating a separate|∆x⟩register and copying the lower fractional bits with CNOTs,
+our circuit computes only this single0.5s-place bitb13∧b 11 into one ancilla qubit using1AND gate, and reads the
+remaining fractional bits of∆xdirectly fromx norm.
+Finally, we perform the Horner multiplications and the Newton-Raphson step. The polynomial to evaluate is
+y0 =a 0−a 1∆x+a 2∆x2−a 3∆x3 =a 0−∆x· (a1−∆x·(a 2−a 3·∆x)),(B9)
+which requires three multiplications and three subtractions. In our reference circuit, we use14bits of∆x (all12
+fractional bits atnp = 6, or14of the20fractional bits at np = 10),17fractional bits for the QROM coefficients
+|c0⟩,|c 1⟩,|c 2⟩,|c 3⟩ and Horner intermediates,28fractional bits for y20,28fractional bits plus2integer bits (30qubits)
+for z =xnormy20 and3 −z ,29fractional bits plus1integer bit (30qubits) for p =y0(3−z ), and30 + np qubits (40at
+np = 10,36at np = 6) fory1 =p≪s . A single shared30-qubit scratch register holds row partial products across all
+multipliers. The remaining arithmetic stages proceed as follows:
+• In-place Horner evaluation:Rather than allocating six fresh output registers, the circuit updates the coefficient
+registers in place over three steps:c2−=T (c3∆x), c1−=T (c2∆x), andc0−=T (c1∆x), leavingy0 in|c0⟩ (1,071
+Toffolis atnp = 10,954at np = 6). Here T (·)drops every partial-product bit below the target register’s least
+significant bit. Each bit of∆x controls a row update that ANDs the live multiplicand slice into the shared scratch
+register, subtracts it in place, and immediately uncomputes the row ANDs by measurement.
+• Squaring:Computes T (y20)into a28-bit register (442Toffolis). Diagonal bits y2k =yk (2k≤ 28) are copied with
+CNOTs, and doubled cross terms2ykyl (k+l−1≤28) are added row by row.
+• Mantissa multiply and correction:Multiplies T (y20)by all2 np + 2bits of xnorm into the30-qubit register
+z = T (xnorm·T (y20))(1 ,043Toffolis at np = 10,719at np = 6), then replaces z in place with3−z in two’s
+complement by applying bitwiseXgates and adding(3≪28) + 1(28Toffolis).
+• Final NR multiply and denormalization:Computesp =T (y0·z )≈ 2/√xnorm into the bottom30qubits of y1
+(867Toffolis), then shiftsy1 =p≪s in place by applying a controlled cyclic left shift of1position on the31-qubit
+slicey 1[k:k+ 31]controlled onf k fork= 0,...,n p−1(30n p CSWAPgates:300atn p = 10,180atn p = 6).
+30
+• Phasing and uncomputation:Applies one Z_POW gate of2 j−F turns on each bitj∈{ 0,...,F− 1} of y1
+(F = 30 +np), and then runs all stages in reverse to restore every scratch qubit to|0⟩ and the input register to|x⟩.

@@ -1,0 +1,24 @@
+# --- competition / reference data (download separately; see README) ---
+data/
+submissions/
+*.zip
+
+# --- large binaries produced by experiments ---
+results/*.kmb
+results/*.kmx
+results/*.bin
+results/*.npy
+results/*.npz
+results/seldump*.txt
+results/*.html
+
+# --- python caches ---
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# --- local env ---
+.env
+results/**/*.kmb
+results/**/*.npz
+results/**/*.npy

@@ -1,0 +1,29 @@
+Traceback (most recent call last):
+  File "/mnt/d/kaggle/google-verifiable-quantum-circuit-compilation/src/b3_train2.py", line 61, in <module>
+    main()
+    ~~~~^^
+  File "/mnt/d/kaggle/google-verifiable-quantum-circuit-compilation/src/b3_train2.py", line 38, in main
+    params, values = train_system(
+                     ~~~~~~~~~~~~^
+        "FeMoCo76o113e",
+        ^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        output_file=args.out,
+        ^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/mnt/d/kaggle/google-verifiable-quantum-circuit-compilation/data/starter_kit/starter_kit/starter/task1_factorization/train_df_thc_qaggle.py", line 377, in train_system
+    return train_df_thc(
+        fcidump_file=fcidump,
+    ...<11 lines>...
+        epsilon_dfthc=epsilon_dfthc,
+    )
+  File "/mnt/d/kaggle/google-verifiable-quantum-circuit-compilation/data/starter_kit/starter_kit/starter/task1_factorization/train_df_thc_qaggle.py", line 271, in train_df_thc
+    check_output_file(output_file)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/mnt/d/kaggle/google-verifiable-quantum-circuit-compilation/data/starter_kit/starter_kit/starter/task1_factorization/train_df_thc_qaggle.py", line 137, in check_output_file
+    return str(check_output_path(output_path))
+               ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/mnt/d/kaggle/google-verifiable-quantum-circuit-compilation/data/starter_kit/starter_kit/starter/task1_factorization/solution_io.py", line 32, in check_output_path
+    raise FileExistsError(f"refusing to overwrite existing solution: {path}")
+FileExistsError: refusing to overwrite existing solution: /mnt/d/kaggle/google-verifiable-quantum-circuit-compilation/results/b3_train_6_192_68_long.npz

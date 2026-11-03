@@ -1,0 +1,10 @@
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+Seeding parameters from results/b3_train_65_60_30.npz
+Training U/V (65, 60, 76) and W (65, 60, 30) with generators None for 1500 epochs with DF-THC-SOS.
+B@epoch 0: ε_fro=1491.8mHa, λ_eff=343.63Ha, Λ=415.82Ha (Λ_1=175.367, Λ_2=240.5), cost = 1825.4mHa, E_SOS: -22321.945Ha, gap: 181.6719Ha, ms/it: 94.11
+B@epoch 150: ε_fro=104.0mHa, λ_eff=202.73Ha, Λ=356.68Ha (Λ_1=95.075, Λ_2=261.6), cost = 296.8mHa, E_SOS: -22203.486Ha, gap: 63.2129Ha, ms/it: 1077.09
+B@epoch 300: ε_fro=45.8mHa, λ_eff=191.13Ha, Λ=349.56Ha (Λ_1=86.857, Λ_2=262.7), cost = 227.0mHa, E_SOS: -22197.154Ha, gap: 56.8809Ha, ms/it: 1167.78
+B@epoch 450: ε_fro=36.5mHa, λ_eff=179.85Ha, Λ=344.85Ha (Λ_1=78.632, Λ_2=266.2), cost = 206.4mHa, E_SOS: -22190.887Ha, gap: 50.6133Ha, ms/it: 1210.19
+B@epoch 600: ε_fro=32.7mHa, λ_eff=170.33Ha, Λ=341.43Ha (Λ_1=71.380, Λ_2=270.1), cost = 193.0mHa, E_SOS: -22185.793Ha, gap: 45.5195Ha, ms/it: 1421.76
+B@epoch 750: ε_fro=30.8mHa, λ_eff=161.95Ha, Λ=338.73Ha (Λ_1=64.959, Λ_2=273.8), cost = 182.8mHa, E_SOS: -22181.496Ha, gap: 41.2227Ha, ms/it: 1236.79
+B@epoch 900: ε_fro=29.7mHa, λ_eff=154.63Ha, Λ=336.58Ha (Λ_1=59.352, Λ_2=277.2), cost = 174.3mHa, E_SOS: -22177.896Ha, gap: 37.6230Ha, ms/it: 1270.27

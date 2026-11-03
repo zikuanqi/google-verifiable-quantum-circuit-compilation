@@ -1,0 +1,7 @@
+{
+  "message": "B1 v3 (173k) + B2 BM decoder + sample B3",
+  "sources": ["b1v3_model.py", "b1v3_build.py", "b2_build.py"],
+  "blobs": {},
+  "b1_v3": {"f2": 8, "f1": 19, "fyr": 27, "gy": 1, "drop2": [5]},
+  "benchmarks": {"invsqrt": "b1_v3", "dqi": "b2", "dfthcsos": "sample"}
+}
